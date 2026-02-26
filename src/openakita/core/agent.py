@@ -2082,33 +2082,33 @@ search_github → install_skill → 使用
 
 ### ⚡ 工具选择优先级（必须严格遵循，从上到下判断）
 
-**Level 1 — 直接委派 `delegate_to_agent`（首选，90% 的场景用这个）**
+**Level 1 — 直接委派 `delegate_to_agent`（首选，单个任务用这个）**
 
 已有 Agent 能处理该任务 → 直接委派，不需要任何修改。
-⚠️ 同一个 agent_id 在同一会话中共用一个实例。如果需要同一类 Agent 的**多个独立分身并行执行不同任务**，请使用 `spawn_agent` 为每个任务生成独立临时实例。
 
 ```
 delegate_to_agent(agent_id="browser-agent", message="详细任务描述", reason="原因")
 ```
 
-**Level 2 — 继承定制 `spawn_agent`（已有 Agent 接近但需微调时使用）**
+**Level 2 — 继承定制 `spawn_agent`（需要定制或多个并行副本时使用）**
 
-已有 Agent 基本匹配但需要微调（追加技能或补充提示词）→ 继承创建临时 Agent。
-每次 spawn 生成独立临时实例（唯一 ID），天然支持并行。
-**任务完成后自动销毁，不污染系统 Agent 列表。**
+- 已有 Agent 基本匹配但需要微调 → 继承并追加技能/提示词
+- **需要同类 Agent 的多个独立副本并行工作** → 用 spawn_agent 为每个任务创建独立实例
+- 每次 spawn 生成唯一 ID，天然支持并行，**任务完成后自动销毁**
 
 ```
 spawn_agent(inherit_from="browser-agent", message="任务描述", extra_skills=["额外技能"], custom_prompt_overlay="补充提示", reason="原因")
 ```
 
-**Level 3 — 并行委派 `delegate_parallel`（多个独立任务时使用）**
+**Level 3 — 并行委派 `delegate_parallel`（多个独立任务同时执行）**
 
-多个独立任务可同时执行时 → 并行委派。可以混合使用已有 Agent。
+多个独立任务可同时执行时 → 并行委派。
+⚠️ 同类任务（如多个调研）→ 所有任务用**同一个 agent_id**，系统自动创建独立副本：
 
 ```
 delegate_parallel(tasks=[
   {{"agent_id": "browser-agent", "message": "调研项目A..."}},
-  {{"agent_id": "data-analyst", "message": "分析数据B..."}}
+  {{"agent_id": "browser-agent", "message": "调研项目B..."}}
 ])
 ```
 
@@ -2119,6 +2119,12 @@ delegate_parallel(tasks=[
 ```
 create_agent(name="名称", description="描述", skills=["技能"], custom_prompt="提示词")
 ```
+
+### 🔴 任务分配原则（严格遵守）
+
+1. **专业对口**：只把任务分配给**专业对口**的 Agent。调研任务→网探/浏览器Agent，代码任务→码哥，文档任务→文助。**严禁**把调研任务分给代码助手，或把编码任务分给文档助手。
+2. **同类任务并行**：当需要多个 Agent **同时做同类事情**（如"用多个 Agent 同时调研"），应使用 `spawn_agent` 创建**同一个最合适 Agent 的多个副本**，而不是把任务分配给不相关的 Agent 凑数。例如：3 个调研任务 → spawn 3 个网探副本，而不是分给网探+码哥+数析。
+3. **异类任务并行**：当多个任务**性质不同**时（如同时需要调研+写代码+分析数据），才分配给不同专业的 Agent。
 
 - 默认创建临时 Agent（ephemeral），任务结束自动清理
 - 仅当用户明确要求"记住这个Agent"时才设 `persistent=true`
@@ -2132,11 +2138,12 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
 
 1. **涉及文档处理**（PPT/Word/Excel/PDF） → `delegate_to_agent(agent_id="office-doc", ...)`
 2. **涉及编写代码或调试** → `delegate_to_agent(agent_id="code-assistant", ...)`
-3. **涉及网络搜索或浏览网页** → `delegate_to_agent(agent_id="browser-agent", ...)`
+3. **涉及网络搜索、浏览网页、项目调研、信息采集** → `delegate_to_agent(agent_id="browser-agent", ...)`
 4. **涉及数据分析或可视化** → `delegate_to_agent(agent_id="data-analyst", ...)`
 5. **已有 Agent 接近但需微调** → `spawn_agent(inherit_from="最接近的agent", ...)`
-6. **多个独立任务** → `delegate_parallel(tasks=[...])`
-7. **完全没有相关 Agent** → `create_agent(...)`（极少使用）
+6. **多个独立同类任务并行**（如同时调研3个项目） → `delegate_parallel` 且所有任务用**同一个 agent_id**
+7. **多个独立异类任务并行**（如调研+编码+分析） → `delegate_parallel` 用不同 agent_id
+8. **完全没有相关 Agent** → `create_agent(...)`（极少使用）
 
 只有当任务是**简单通用问答**、**不涉及上述任何专业领域**、或**用户明确要你亲自做**时，才自己处理。
 

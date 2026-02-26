@@ -139,18 +139,22 @@ AGENT_TOOLS = [
         "category": "Agent",
         "description": (
             "Delegate tasks to multiple agents in parallel. "
-            "Use when you need to assign independent tasks to different agents simultaneously. "
-            "Can mix existing agents and spawned agents."
+            "IMPORTANT: For multiple similar tasks (e.g. researching 3 topics), "
+            "use the SAME suitable agent_id for all tasks — the system auto-creates "
+            "independent clones. Do NOT assign unrelated agents to tasks they are not "
+            "specialized for."
         ),
         "detail": (
             "同时委派任务给多个 Agent 并行执行。\n\n"
-            "**适用场景**：\n"
-            "- 多个独立子任务可以同时执行（如同时搜索+分析）\n"
-            "- 需要多个 Agent 同时调研不同方向\n\n"
+            "**核心规则**：\n"
+            "- 同类任务（如多个调研任务）→ 用**同一个最合适的 agent_id**，"
+            "系统自动为每个任务创建独立副本\n"
+            "- 异类任务（如调研+编码+数据分析）→ 才分配给不同专业 Agent\n"
+            "- **严禁**为了凑并行把任务分给不对口的 Agent\n\n"
             "**注意事项**：\n"
             "- 所有任务并行执行，结果一起返回\n"
             "- 各任务之间不能有依赖关系（有依赖请用 delegate_to_agent 串行委派）\n"
-            "- 对同一个 agent_id 发多个任务时，每个会获得独立实例"
+            "- 对同一个 agent_id 发多个任务时，系统自动创建独立实例"
         ),
         "input_schema": {
             "type": "object",
@@ -182,14 +186,34 @@ AGENT_TOOLS = [
         },
         "examples": [
             {
-                "scenario": "同时让两个 Agent 调研不同项目",
+                "scenario": "✅ 正确：同时调研多个项目（同类任务 → 同一 Agent 多副本）",
                 "params": {
                     "tasks": [
-                        {"agent_id": "browser-agent", "message": "调研 OpenAkita 项目", "reason": "网络搜索"},
-                        {"agent_id": "data-analyst", "message": "分析产品数据", "reason": "数据分析"},
+                        {"agent_id": "browser-agent", "message": "深入调研 OpenAkita 项目的架构、功能和社区活跃度", "reason": "调研项目A"},
+                        {"agent_id": "browser-agent", "message": "深入调研 OpenClaw 项目的架构、功能和社区活跃度", "reason": "调研项目B"},
                     ],
                 },
-                "expected": "两个 Agent 并行执行后合并返回结果",
+                "expected": "系统自动为 browser-agent 创建2个独立副本，并行执行后合并返回",
+            },
+            {
+                "scenario": "✅ 正确：不同类型任务并行（异类任务 → 不同专业 Agent）",
+                "params": {
+                    "tasks": [
+                        {"agent_id": "browser-agent", "message": "在网上调研 React 19 的新特性", "reason": "网络调研"},
+                        {"agent_id": "code-assistant", "message": "分析当前项目的 React 版本升级兼容性", "reason": "代码分析"},
+                    ],
+                },
+                "expected": "调研和代码分析并行执行",
+            },
+            {
+                "scenario": "❌ 错误：把调研任务分给不对口的 Agent",
+                "params": {
+                    "tasks": [
+                        {"agent_id": "browser-agent", "message": "调研项目A"},
+                        {"agent_id": "code-assistant", "message": "调研项目B"},
+                    ],
+                },
+                "expected": "严禁！code-assistant 是代码助手，不擅长网络调研。应该让两个调研任务都用 browser-agent",
             },
         ],
     },
