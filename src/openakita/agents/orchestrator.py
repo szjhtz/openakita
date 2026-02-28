@@ -332,6 +332,21 @@ class AgentOrchestrator:
                 "elapsed_ms": round(elapsed_ms),
                 "result_preview": str(result)[:300],
             })
+
+            # Agent Harness: record delegation completion
+            try:
+                from openakita.tracing.tracer import get_tracer
+                tracer = get_tracer()
+                tracer.record_decision(
+                    decision_type="delegation_complete",
+                    reasoning=f"{agent_profile_id} completed in {elapsed_ms:.0f}ms",
+                    outcome="success",
+                    agent=agent_profile_id,
+                    elapsed_ms=round(elapsed_ms),
+                )
+            except Exception:
+                pass
+
             return result
 
         except asyncio.TimeoutError:
@@ -760,11 +775,31 @@ class AgentOrchestrator:
         """
         Delegate work from one agent to another.
         Called by agent tools (e.g. delegate_to_agent).
+
+        Agent Harness enhancements:
+        - Cross-agent trace linking (DELEGATION span)
+        - Budget allocation for sub-agents
+        - Context isolation (only task description passed, not full history)
         """
         self._ensure_deps()
         logger.info(
             f"[Orchestrator] Delegation: {from_agent} -> {to_agent} (depth={depth})"
         )
+
+        # Agent Harness: Decision Trace — delegation span
+        try:
+            from openakita.tracing.tracer import get_tracer
+            tracer = get_tracer()
+            tracer.record_decision(
+                decision_type="delegation",
+                reasoning=reason or f"{from_agent} delegates to {to_agent}",
+                outcome="started",
+                from_agent=from_agent,
+                to_agent=to_agent,
+                depth=depth,
+            )
+        except Exception:
+            pass
 
         # Pre-register sub-agent state immediately so frontend polling
         # can pick it up before _run_with_progress_timeout starts

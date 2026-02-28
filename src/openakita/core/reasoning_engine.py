@@ -39,6 +39,8 @@ from .response_handler import (
     parse_intent_tag,
     strip_thinking_tags,
 )
+from .resource_budget import BudgetAction, ResourceBudget, create_budget_from_settings
+from .supervisor import RuntimeSupervisor
 from .token_tracking import TokenTrackingContext, reset_tracking_context, set_tracking_context
 from .tool_executor import ToolExecutor
 
@@ -114,6 +116,10 @@ class ReasoningEngine:
         self._state = agent_state
         self._memory_manager = memory_manager
 
+        # Agent Harness: Runtime Supervisor + Resource Budget
+        self._supervisor = RuntimeSupervisor(enabled=getattr(settings, "supervisor_enabled", True))
+        self._budget: ResourceBudget = create_budget_from_settings()
+
         # Checkpoint 管理
         self._checkpoints: list[Checkpoint] = []
         self._tool_failure_counter: dict[str, int] = {}  # tool_name -> consecutive_failures
@@ -137,6 +143,39 @@ class ReasoningEngine:
             "browser_get_content", "browser_screenshot",
         })
 
+    # ==================== Failure Analysis (Agent Harness) ====================
+
+    def _run_failure_analysis(
+        self,
+        react_trace: list[dict],
+        exit_reason: str,
+        task_description: str = "",
+        task_id: str = "",
+    ) -> None:
+        """在任务失败时运行失败分析管线"""
+        try:
+            from ..config import settings
+            from ..evolution.failure_analysis import FailureAnalyzer
+            analyzer = FailureAnalyzer(output_dir=settings.data_dir / "failure_analysis")
+            analyzer.analyze_task(
+                task_id=task_id or "unknown",
+                react_trace=react_trace,
+                supervisor_events=[
+                    {
+                        "pattern": e.pattern.value,
+                        "level": e.level.name,
+                        "detail": e.detail,
+                        "iteration": e.iteration,
+                    }
+                    for e in self._supervisor.events
+                ],
+                budget_summary=self._budget.get_summary(),
+                exit_reason=exit_reason,
+                task_description=task_description,
+            )
+        except Exception as e:
+            logger.debug(f"[FailureAnalysis] Analysis error: {e}")
+
     # ==================== 内存管理 ====================
 
     def release_large_buffers(self) -> None:
@@ -153,6 +192,7 @@ class ReasoningEngine:
         self._last_working_messages = []
         self._checkpoints.clear()
         self._tool_failure_counter.clear()
+        self._supervisor.reset()
 
     # ==================== ask_user 等待用户回复 ====================
 
@@ -336,7 +376,7 @@ class ReasoningEngine:
                 content = result
 
             has_error = any(marker in content for marker in [
-                "❌", "⚠️ 工具执行错误", "错误类型:", "ToolError",
+                "❌", "⚠️ 工具执行错误", "错误类型:", "ToolError", "⚠️ 策略拒绝:",
             ])
             has_success = any(marker in content for marker in [
                 "✅", '"status": "delivered"', '"ok": true',
@@ -436,6 +476,10 @@ class ReasoningEngine:
         """
         self._last_exit_reason = "normal"
         self._last_react_trace = []
+        self._supervisor.reset()
+        self._budget = create_budget_from_settings()
+        self._budget.start()
+        self._budget_warned_dims: set[str] = set()
 
         _session_key = conversation_id or ""
         state = self._state.get_task_for_session(_session_key) if _session_key else self._state.current_task
@@ -565,6 +609,33 @@ class ReasoningEngine:
                     working_messages, _build_effective_system_prompt(), current_model, state
                 )
 
+            # Resource Budget 检查
+            self._budget.record_iteration()
+            budget_status = self._budget.check()
+            if budget_status.action == BudgetAction.PAUSE:
+                logger.warning(f"[Budget] PAUSE: {budget_status.message}")
+                self._save_react_trace(react_trace, conversation_id, session_type, "budget_exceeded", _trace_started_at)
+                tracer.end_trace(metadata={
+                    "result": "budget_exceeded",
+                    "iterations": iteration,
+                    "budget_dimension": budget_status.dimension,
+                })
+                self._run_failure_analysis(
+                    react_trace, "budget_exceeded",
+                    task_description=task_description,
+                    task_id=state.task_id,
+                )
+                return (
+                    f"⚠️ 任务资源预算已用尽（{budget_status.dimension}: "
+                    f"{budget_status.usage_ratio:.0%}），任务暂停。\n"
+                    f"已完成的工作进度已保存，请调整预算后继续。"
+                )
+            elif budget_status.action in (BudgetAction.WARNING, BudgetAction.DOWNGRADE):
+                budget_warning = self._budget.get_budget_prompt_warning()
+                if budget_warning and budget_status.dimension not in self._budget_warned_dims:
+                    working_messages.append({"role": "user", "content": budget_warning})
+                    self._budget_warned_dims.add(budget_status.dimension)
+
             # 任务监控
             if task_monitor:
                 task_monitor.begin_iteration(iteration + 1, current_model)
@@ -609,6 +680,30 @@ class ReasoningEngine:
                     self._context_manager.set_cancel_event(state.cancel_event)
                 _after_tokens = self._context_manager.estimate_messages_tokens(working_messages)
                 if _after_tokens < _before_tokens:
+                    # Context Rewriting: 压缩后注入方向提示
+                    _plan_sec = ""
+                    try:
+                        from ..tools.handlers.plan import get_active_plan_prompt
+                        if conversation_id:
+                            _plan_sec = get_active_plan_prompt(conversation_id) or ""
+                    except Exception:
+                        pass
+                    _scratchpad = ""
+                    if self._memory_manager:
+                        try:
+                            _sp = getattr(self._memory_manager, "get_scratchpad_summary", None)
+                            if _sp:
+                                _scratchpad = _sp() or ""
+                        except Exception:
+                            pass
+                    working_messages = ContextManager.rewrite_after_compression(
+                        working_messages,
+                        plan_section=_plan_sec,
+                        scratchpad_summary=_scratchpad,
+                        completed_tools=executed_tool_names,
+                        task_description=task_description,
+                    )
+
                     _ctx_compressed_info = {
                         "before_tokens": _before_tokens,
                         "after_tokens": _after_tokens,
@@ -712,6 +807,10 @@ class ReasoningEngine:
             _usage = getattr(_raw, "usage", None) if _raw else None
             _in_tokens = getattr(_usage, "input_tokens", 0) if _usage else 0
             _out_tokens = getattr(_usage, "output_tokens", 0) if _usage else 0
+
+            # Resource Budget: 记录 token 消耗
+            if _in_tokens or _out_tokens:
+                self._budget.record_tokens(_in_tokens, _out_tokens)
             _iter_trace: dict = {
                 "iteration": iteration + 1,
                 "timestamp": datetime.now().isoformat(),
@@ -1005,20 +1104,23 @@ class ReasoningEngine:
                     tools_executed_in_task = True
                     executed_tool_names.extend(executed)
                     state.record_tool_execution(executed)
+                    self._budget.record_tool_calls(len(executed))
 
-                    # 记录工具成功/失败状态 + IM 进度
-                    for i, tool_name in enumerate(executed):
-                        result_content = ""
-                        if i < len(tool_results):
-                            r = tool_results[i]
-                            result_content = str(r.get("content", "")) if isinstance(r, dict) else str(r)
-                        is_error = any(m in result_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:"])
-                        self._record_tool_result(tool_name, success=not is_error)
-                        # IM 进度: 工具结果摘要
-                        _r_summary = self._summarize_tool_result(tool_name, result_content)
-                        if _r_summary:
-                            _icon = "❌" if is_error else "✅"
-                            await _emit_progress(f"{_icon} {_r_summary}")
+                # 记录工具成功/失败状态 + IM 进度
+                # 使用 decision.tool_calls / tool_results 对齐遍历，
+                # 避免 executed（仅含成功名）与 tool_results 长度不一致
+                for i, tc in enumerate(decision.tool_calls):
+                    _tc_name = tc.get("name", "")
+                    result_content = ""
+                    if i < len(tool_results):
+                        r = tool_results[i]
+                        result_content = str(r.get("content", "")) if isinstance(r, dict) else str(r)
+                    is_error = any(m in result_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"])
+                    self._record_tool_result(_tc_name, success=not is_error)
+                    _r_summary = self._summarize_tool_result(_tc_name, result_content)
+                    if _r_summary:
+                        _icon = "❌" if is_error else "✅"
+                        await _emit_progress(f"{_icon} {_r_summary}")
 
                 if receipts:
                     delivery_receipts = receipts
@@ -1078,8 +1180,29 @@ class ReasoningEngine:
                     "content": tool_results,
                 })
 
+                # Supervisor: 记录工具调用数据
+                # 使用 decision.tool_calls 和 tool_results 按索引对齐，
+                # 避免 executed（仅含成功工具名）与 tool_results 长度不一致导致错配
+                for i, tc in enumerate(decision.tool_calls):
+                    _tc_name = tc.get("name", "")
+                    result_content = ""
+                    if i < len(tool_results):
+                        r = tool_results[i]
+                        result_content = str(r.get("content", "")) if isinstance(r, dict) else str(r)
+                    is_error = any(m in result_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"])
+                    self._supervisor.record_tool_call(
+                        tool_name=_tc_name, params=tc.get("input", {}),
+                        success=not is_error, iteration=iteration,
+                    )
+
+                # Supervisor: 记录响应文本和 token 用量
+                self._supervisor.record_response(decision.text_content or "")
+                if _in_tokens or _out_tokens:
+                    self._supervisor.record_token_usage(_in_tokens + _out_tokens)
+
                 # 循环检测
                 consecutive_tool_rounds += 1
+                self._supervisor.record_consecutive_tool_rounds(consecutive_tool_rounds)
 
                 # stop_reason 检查
                 if decision.stop_reason == "end_turn":
@@ -1099,33 +1222,70 @@ class ReasoningEngine:
                         })
                         return cleaned_text
 
-                # 工具签名循环检测
+                # 工具签名循环检测 (Supervisor-based)
                 round_signatures = [_make_tool_signature(tc) for tc in decision.tool_calls]
                 round_sig_str = "+".join(sorted(round_signatures))
                 recent_tool_signatures.append(round_sig_str)
                 if len(recent_tool_signatures) > tool_pattern_window:
                     recent_tool_signatures = recent_tool_signatures[-tool_pattern_window:]
+                self._supervisor.record_tool_signature(round_sig_str)
 
-                loop_result = self._detect_loops(
-                    recent_tool_signatures,
-                    consecutive_tool_rounds,
-                    working_messages,
-                    decision.text_content,
-                    llm_self_check_interval,
-                    extreme_safety_threshold,
-                    conversation_id,
+                # Supervisor 综合评估
+                _has_plan = self._has_active_plan_pending(conversation_id)
+                _plan_step = ""
+                try:
+                    from ..tools.handlers.plan import get_active_plan_prompt
+                    if conversation_id:
+                        _plan_step = get_active_plan_prompt(conversation_id) or ""
+                except Exception:
+                    pass
+
+                intervention = self._supervisor.evaluate(
+                    iteration,
+                    has_active_plan=_has_plan,
+                    plan_current_step=_plan_step,
                 )
-                if loop_result == "terminate":
-                    cleaned = strip_thinking_tags(decision.text_content)
-                    self._save_react_trace(react_trace, conversation_id, session_type, "loop_terminated", _trace_started_at)
-                    try:
-                        state.transition(TaskStatus.FAILED)
-                    except ValueError:
-                        pass
-                    tracer.end_trace(metadata={"result": "loop_terminated", "iterations": iteration + 1})
-                    return cleaned or "⚠️ 检测到工具调用陷入死循环，任务已自动终止。请重新描述您的需求。"
-                if loop_result == "disable_force":
-                    max_no_tool_retries = 0
+
+                if intervention:
+                    if intervention.should_terminate:
+                        cleaned = strip_thinking_tags(decision.text_content)
+                        self._save_react_trace(react_trace, conversation_id, session_type, "loop_terminated", _trace_started_at)
+                        try:
+                            state.transition(TaskStatus.FAILED)
+                        except ValueError:
+                            pass
+                        tracer.end_trace(metadata={
+                            "result": "loop_terminated",
+                            "iterations": iteration + 1,
+                            "supervisor_pattern": intervention.pattern.value,
+                        })
+                        self._run_failure_analysis(
+                            react_trace, "loop_terminated",
+                            task_description=task_description,
+                            task_id=state.task_id,
+                        )
+                        return cleaned or "⚠️ 检测到工具调用陷入死循环，任务已自动终止。请重新描述您的需求。"
+
+                    if intervention.should_rollback:
+                        rollback_result = self._rollback(intervention.message)
+                        if rollback_result:
+                            working_messages, _ = rollback_result
+                            if intervention.should_inject_prompt and intervention.prompt_injection:
+                                working_messages.append({
+                                    "role": "user",
+                                    "content": intervention.prompt_injection,
+                                })
+                            logger.info(f"[Supervisor] Rollback + strategy switch: {intervention.message}")
+                            continue
+
+                    if intervention.should_inject_prompt and intervention.prompt_injection:
+                        working_messages.append({
+                            "role": "user",
+                            "content": intervention.prompt_injection,
+                        })
+
+                    if intervention.should_escalate:
+                        max_no_tool_retries = 0
 
         self._last_working_messages = working_messages
         self._save_react_trace(react_trace, conversation_id, session_type, "max_iterations", _trace_started_at)
@@ -1134,6 +1294,11 @@ class ReasoningEngine:
         except ValueError:
             pass
         tracer.end_trace(metadata={"result": "max_iterations", "iterations": max_iterations})
+        self._run_failure_analysis(
+            react_trace, "max_iterations",
+            task_description=task_description,
+            task_id=state.task_id,
+        )
         return "已达到最大工具调用次数，请重新描述您的需求。"
 
     # ==================== 流式输出 (SSE) ====================
@@ -1179,6 +1344,10 @@ class ReasoningEngine:
         tools = tools or []
         self._last_exit_reason = "normal"
         self._last_react_trace = []
+        self._supervisor.reset()
+        self._budget = create_budget_from_settings()
+        self._budget.start()
+        self._budget_warned_dims = set()
 
         react_trace: list[dict] = []
         _trace_started_at = datetime.now().isoformat()
@@ -1320,6 +1489,33 @@ class ReasoningEngine:
                     yield {"type": "done"}
                     return
 
+                # --- Resource Budget 检查（与 run() 一致） ---
+                self._budget.record_iteration()
+                budget_status = self._budget.check()
+                if budget_status.action == BudgetAction.PAUSE:
+                    logger.warning(f"[Budget-Stream] PAUSE: {budget_status.message}")
+                    self._save_react_trace(
+                        react_trace, conversation_id, session_type, "budget_exceeded", _trace_started_at
+                    )
+                    self._run_failure_analysis(
+                        react_trace, "budget_exceeded",
+                        task_description=task_description,
+                        task_id=state.task_id,
+                    )
+                    msg = (
+                        f"⚠️ 任务资源预算已用尽（{budget_status.dimension}: "
+                        f"{budget_status.usage_ratio:.0%}），任务暂停。\n"
+                        f"已完成的工作进度已保存，请调整预算后继续。"
+                    )
+                    yield {"type": "text_delta", "content": msg}
+                    yield {"type": "done"}
+                    return
+                elif budget_status.action in (BudgetAction.WARNING, BudgetAction.DOWNGRADE):
+                    budget_warning = self._budget.get_budget_prompt_warning()
+                    if budget_warning and budget_status.dimension not in self._budget_warned_dims:
+                        working_messages.append({"role": "user", "content": budget_warning})
+                        self._budget_warned_dims.add(budget_status.dimension)
+
                 # --- TaskMonitor: 迭代开始 + 模型切换检查 ---
                 if task_monitor:
                     task_monitor.begin_iteration(_iteration + 1, current_model)
@@ -1373,6 +1569,28 @@ class ReasoningEngine:
                         self._context_manager.set_cancel_event(state.cancel_event)
                     _after_tokens = self._context_manager.estimate_messages_tokens(working_messages)
                     if _after_tokens < _before_tokens:
+                        _plan_sec = ""
+                        try:
+                            from ..tools.handlers.plan import get_active_plan_prompt
+                            if conversation_id:
+                                _plan_sec = get_active_plan_prompt(conversation_id) or ""
+                        except Exception:
+                            pass
+                        _scratchpad = ""
+                        if self._memory_manager:
+                            try:
+                                _sp = getattr(self._memory_manager, "get_scratchpad_summary", None)
+                                if _sp:
+                                    _scratchpad = _sp() or ""
+                            except Exception:
+                                pass
+                        working_messages = ContextManager.rewrite_after_compression(
+                            working_messages,
+                            plan_section=_plan_sec,
+                            scratchpad_summary=_scratchpad,
+                            completed_tools=executed_tool_names,
+                            task_description=task_description,
+                        )
                         _ctx_compressed_info = {
                             "before_tokens": _before_tokens,
                             "after_tokens": _after_tokens,
@@ -1500,11 +1718,13 @@ class ReasoningEngine:
                 if task_monitor:
                     task_monitor.end_iteration(decision.text_content or "")
 
-                # -- 收集 ReAct trace --
+                # -- 收集 ReAct trace + Budget 记录 token --
                 _raw = decision.raw_response
                 _usage = getattr(_raw, "usage", None) if _raw else None
                 _in_tokens = getattr(_usage, "input_tokens", 0) if _usage else 0
                 _out_tokens = getattr(_usage, "output_tokens", 0) if _usage else 0
+                if _in_tokens or _out_tokens:
+                    self._budget.record_tokens(_in_tokens, _out_tokens)
                 _iter_trace: dict = {
                     "iteration": _iteration + 1,
                     "timestamp": datetime.now().isoformat(),
@@ -1628,17 +1848,25 @@ class ReasoningEngine:
                             # chain_text: 工具描述
                             yield {"type": "chain_text", "content": self._describe_tool_call(t_name, t_args)}
                             yield {"type": "tool_call_start", "tool": t_name, "args": t_args, "id": t_id}
-                            _tool_is_error = False
-                            try:
-                                r = await self._tool_executor.execute_tool(
-                                    tool_name=t_name,
-                                    tool_input=t_args if isinstance(t_args, dict) else {},
-                                    session_id=conversation_id,
-                                )
-                                r = str(r) if r else ""
-                            except Exception as exc:
-                                r = f"Tool error: {exc}"
+                            # PolicyEngine 检查
+                            from .policy import PolicyDecision, get_policy_engine
+                            _pe = get_policy_engine()
+                            _pr = _pe.assert_tool_allowed(t_name, t_args if isinstance(t_args, dict) else {})
+                            if _pr.decision == PolicyDecision.DENY:
+                                r = f"⚠️ 策略拒绝: {_pr.reason}"
                                 _tool_is_error = True
+                            else:
+                                _tool_is_error = False
+                                try:
+                                    r = await self._tool_executor.execute_tool(
+                                        tool_name=t_name,
+                                        tool_input=t_args if isinstance(t_args, dict) else {},
+                                        session_id=conversation_id,
+                                    )
+                                    r = str(r) if r else ""
+                                except Exception as exc:
+                                    r = f"Tool error: {exc}"
+                                    _tool_is_error = True
                             yield {"type": "tool_call_end", "tool": t_name, "result": r[:_SSE_RESULT_PREVIEW_CHARS], "id": t_id, "is_error": _tool_is_error}
                             # chain_text: 结果摘要
                             _ask_result_summary = self._summarize_tool_result(t_name, r)
@@ -1698,6 +1926,7 @@ class ReasoningEngine:
 
                     # ---- 正常工具执行（支持 cancel_event / skip_event 三路竞速中断） ----
                     tool_results_for_msg: list[dict] = []
+                    _non_denied_tool_names: list[str] = []
                     _stream_cancelled = False
                     _stream_skipped = False
                     cancel_event = state.cancel_event if state else asyncio.Event()
@@ -1716,6 +1945,30 @@ class ReasoningEngine:
                         yield {"type": "chain_text", "content": _tool_desc}
 
                         yield {"type": "tool_call_start", "tool": tool_name, "args": tool_args, "id": tool_id}
+
+                        # PolicyEngine 检查（与 execute_batch 一致）
+                        from .policy import PolicyDecision, get_policy_engine
+                        _pe = get_policy_engine()
+                        _pr = _pe.assert_tool_allowed(tool_name, tool_args if isinstance(tool_args, dict) else {})
+                        if _pr.decision == PolicyDecision.DENY:
+                            result_text = f"⚠️ 策略拒绝: {_pr.reason}"
+                            yield {
+                                "type": "tool_call_end", "tool": tool_name,
+                                "result": result_text[:_SSE_RESULT_PREVIEW_CHARS],
+                                "id": tool_id, "is_error": True,
+                            }
+                            _deny_summary = self._summarize_tool_result(tool_name, result_text)
+                            if _deny_summary:
+                                yield {"type": "chain_text", "content": _deny_summary}
+                            tool_results_for_msg.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": result_text,
+                                "is_error": True,
+                            })
+                            continue
+
+                        _non_denied_tool_names.append(tool_name)
 
                         # 将工具执行与 cancel_event / skip_event 三路竞速
                         # 注意: 不在此处 clear_skip()，让已到达的 skip 信号自然被竞速消费
@@ -1843,18 +2096,23 @@ class ReasoningEngine:
                         })
 
                     if decision.tool_calls:
-                        tools_executed_in_task = True
-                        _executed = [tc.get("name", "") for tc in decision.tool_calls]
-                        executed_tool_names.extend(_executed)
-                        state.record_tool_execution(_executed)
+                        # _non_denied_tool_names 在工具循环中构建，
+                        # 仅含通过策略检查的工具（与 run() 的 executed 语义一致）
+                        if _non_denied_tool_names:
+                            tools_executed_in_task = True
+                            executed_tool_names.extend(_non_denied_tool_names)
+                            state.record_tool_execution(_non_denied_tool_names)
+                            self._budget.record_tool_calls(len(_non_denied_tool_names))
 
-                        # 记录工具成功/失败状态（与 run() 一致）
-                        for i, t_name in enumerate(_executed):
+                        # 记录工具成功/失败状态（遍历 decision.tool_calls 保持索引对齐，
+                        # 包含策略拒绝的工具，与 run() 一致）
+                        for i, tc_rec in enumerate(decision.tool_calls):
+                            _tc_name = tc_rec.get("name", "")
                             r_content = ""
                             if i < len(tool_results_for_msg):
                                 r_content = str(tool_results_for_msg[i].get("content", ""))
-                            is_error = any(m in r_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:"])
-                            self._record_tool_result(t_name, success=not is_error)
+                            is_error = any(m in r_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"])
+                            self._record_tool_result(_tc_name, success=not is_error)
 
                     # 收集工具结果到 trace（保存完整内容，不截断）
                     _iter_trace["tool_results"] = [
@@ -1911,8 +2169,25 @@ class ReasoningEngine:
                                 _preview = _content.split("]")[1].split("\n")[0].strip() if "]" in _content else _content[:60]
                                 yield {"type": "chain_text", "content": f"用户插入消息: {_preview[:60]}"}
 
-                    # --- 循环检测（与 run() 一致） ---
+                    # --- Supervisor: 记录工具数据（遍历 decision.tool_calls 保持索引对齐，与 run() 一致） ---
+                    for _si, _stc in enumerate(decision.tool_calls or []):
+                        _stn = _stc.get("name", "")
+                        _sr_content = ""
+                        if _si < len(tool_results_for_msg):
+                            _sr = tool_results_for_msg[_si]
+                            _sr_content = str(_sr.get("content", "")) if isinstance(_sr, dict) else str(_sr)
+                        _sr_err = any(m in _sr_content for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"])
+                        self._supervisor.record_tool_call(
+                            tool_name=_stn, params=_stc.get("input", {}),
+                            success=not _sr_err, iteration=_iteration,
+                        )
+                    self._supervisor.record_response(decision.text_content or "")
+                    if _in_tokens or _out_tokens:
+                        self._supervisor.record_token_usage(_in_tokens + _out_tokens)
+
+                    # --- 循环检测（Supervisor-based, 与 run() 一致） ---
                     consecutive_tool_rounds += 1
+                    self._supervisor.record_consecutive_tool_rounds(consecutive_tool_rounds)
 
                     # stop_reason 检查
                     if decision.stop_reason == "end_turn":
@@ -1933,38 +2208,61 @@ class ReasoningEngine:
                             yield {"type": "done"}
                             return
 
-                    # 工具签名循环检测
+                    # Supervisor 综合评估
                     round_signatures = [_make_tool_sig(tc) for tc in decision.tool_calls]
                     round_sig_str = "+".join(sorted(round_signatures))
                     recent_tool_signatures.append(round_sig_str)
                     if len(recent_tool_signatures) > tool_pattern_window:
                         recent_tool_signatures = recent_tool_signatures[-tool_pattern_window:]
+                    self._supervisor.record_tool_signature(round_sig_str)
 
-                    loop_result = self._detect_loops(
-                        recent_tool_signatures,
-                        consecutive_tool_rounds,
-                        working_messages,
-                        decision.text_content,
-                        llm_self_check_interval,
-                        extreme_safety_threshold,
-                        conversation_id,
+                    _has_plan_s = self._has_active_plan_pending(conversation_id)
+                    _plan_step_s = ""
+                    try:
+                        from ..tools.handlers.plan import get_active_plan_prompt
+                        if conversation_id:
+                            _plan_step_s = get_active_plan_prompt(conversation_id) or ""
+                    except Exception:
+                        pass
+                    intervention = self._supervisor.evaluate(
+                        _iteration, has_active_plan=_has_plan_s,
+                        plan_current_step=_plan_step_s,
                     )
-                    if loop_result == "terminate":
-                        cleaned = strip_thinking_tags(decision.text_content)
-                        self._save_react_trace(
-                            react_trace, conversation_id, session_type,
-                            "loop_terminated", _trace_started_at,
-                        )
-                        try:
-                            state.transition(TaskStatus.FAILED)
-                        except ValueError:
-                            state.status = TaskStatus.FAILED
-                        msg = cleaned or "⚠️ 检测到工具调用陷入死循环，任务已自动终止。请重新描述您的需求。"
-                        yield {"type": "text_delta", "content": msg}
-                        yield {"type": "done"}
-                        return
-                    if loop_result == "disable_force":
-                        max_no_tool_retries = 0
+
+                    if intervention:
+                        if intervention.should_terminate:
+                            cleaned = strip_thinking_tags(decision.text_content)
+                            self._save_react_trace(
+                                react_trace, conversation_id, session_type,
+                                "loop_terminated", _trace_started_at,
+                            )
+                            try:
+                                state.transition(TaskStatus.FAILED)
+                            except ValueError:
+                                state.status = TaskStatus.FAILED
+                            self._run_failure_analysis(
+                                react_trace, "loop_terminated",
+                                task_description=task_description,
+                                task_id=state.task_id,
+                            )
+                            msg = cleaned or "⚠️ 检测到工具调用陷入死循环，任务已自动终止。请重新描述您的需求。"
+                            yield {"type": "text_delta", "content": msg}
+                            yield {"type": "done"}
+                            return
+
+                        if intervention.should_rollback:
+                            rollback_result = self._rollback(intervention.message)
+                            if rollback_result:
+                                working_messages, _ = rollback_result
+
+                        if intervention.should_inject_prompt and intervention.prompt_injection:
+                            working_messages.append({
+                                "role": "user",
+                                "content": intervention.prompt_injection,
+                            })
+
+                        if intervention.should_escalate:
+                            max_no_tool_retries = 0
 
                     continue  # Next iteration
 
@@ -1978,6 +2276,11 @@ class ReasoningEngine:
             except ValueError:
                 state.status = TaskStatus.FAILED
             logger.info(f"[ReAct-Stream] === MAX_ITERATIONS reached ({max_iterations}) ===")
+            self._run_failure_analysis(
+                react_trace, "max_iterations",
+                task_description=task_description,
+                task_id=state.task_id,
+            )
             yield {"type": "text_delta", "content": "\n\n（已达到最大迭代次数）"}
             yield {"type": "done"}
 
@@ -2064,7 +2367,7 @@ class ReasoningEngine:
         if not result_text:
             return ""
         r = result_text.strip()
-        is_error = any(m in r[:200] for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "Tool error:"])
+        is_error = any(m in r[:200] for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "Tool error:", "⚠️ 策略拒绝:"])
         if is_error:
             # 提取第一行错误信息
             first_line = r.split("\n")[0][:120]

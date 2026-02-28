@@ -359,8 +359,16 @@ class Settings(BaseSettings):
         description="Bug report cloud endpoint URL (Cloudflare Worker). Empty = feature disabled.",
     )
 
+    # === Harness 配置 ===
+    supervisor_enabled: bool = Field(default=True, description="是否启用运行时监督器 (RuntimeSupervisor)")
+    task_budget_tokens: int = Field(default=0, description="单次任务最大 token 消耗 (0=不限制)")
+    task_budget_cost: float = Field(default=0.0, description="单次任务最大成本 USD (0=不限制)")
+    task_budget_duration: int = Field(default=0, description="单次任务最大时长秒 (0=不限制)")
+    task_budget_iterations: int = Field(default=0, description="单次任务最大迭代次数 (0=不限制)")
+    task_budget_tool_calls: int = Field(default=0, description="单次任务最大工具调用次数 (0=不限制)")
+
     # === 追踪配置 ===
-    tracing_enabled: bool = Field(default=False, description="是否启用 Agent 追踪")
+    tracing_enabled: bool = Field(default=True, description="是否启用 Agent 追踪（轻量模式默认开启）")
     tracing_export_dir: str = Field(default="data/traces", description="追踪导出目录")
     tracing_console_export: bool = Field(default=False, description="是否同时导出到控制台")
 

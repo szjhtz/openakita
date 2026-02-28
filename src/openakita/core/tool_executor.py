@@ -313,6 +313,23 @@ class ToolExecutor:
                     None,
                 )
 
+            # Policy Engine check
+            from .policy import PolicyDecision, get_policy_engine
+            policy_engine = get_policy_engine()
+            policy_result = policy_engine.assert_tool_allowed(tool_name, tool_input)
+            if policy_result.decision == PolicyDecision.DENY:
+                return (
+                    idx,
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": f"⚠️ 策略拒绝: {policy_result.reason}",
+                        "is_error": True,
+                    },
+                    None,
+                    None,
+                )
+
             handler_name = self.get_handler_name(tool_name)
             handler_lock = self._handler_locks.get(handler_name) if handler_name else None
 

@@ -27,6 +27,11 @@ class SpanType(Enum):
     REASONING = "reasoning"  # 推理循环
     PROMPT = "prompt"  # 提示词构建
     TASK = "task"  # 完整任务
+    # Agent Harness: 决策追踪扩展
+    DECISION = "decision"  # 决策节点（工具选择/策略选择）
+    VERIFICATION = "verification"  # 验证节点（任务完成验证/Plan 步骤验证）
+    SUPERVISION = "supervision"  # 监督节点（循环检测/干预决策）
+    DELEGATION = "delegation"  # 委派节点（多 Agent 委派）
 
 
 class SpanStatus(Enum):
@@ -349,6 +354,79 @@ class AgentTracer:
         attrs = {"session_id": session_id, **attributes}
         with self.span("agent.task", SpanType.TASK, **attrs) as s:
             yield s
+
+    # ==================== Agent Harness: 决策追踪 ====================
+
+    @contextmanager
+    def decision_span(
+        self,
+        decision_type: str = "",
+        reasoning: str = "",
+        **attributes: Any,
+    ) -> Generator[Span, None, None]:
+        """决策节点 Span（工具选择/策略选择/任务分解）"""
+        attrs = {
+            "decision_type": decision_type,
+            "reasoning": reasoning[:500] if reasoning else "",
+            **attributes,
+        }
+        with self.span(f"decision.{decision_type}", SpanType.DECISION, **attrs) as s:
+            yield s
+
+    @contextmanager
+    def verification_span(
+        self,
+        verification_type: str = "",
+        **attributes: Any,
+    ) -> Generator[Span, None, None]:
+        """验证节点 Span（任务完成验证/Plan 步骤验证）"""
+        attrs = {"verification_type": verification_type, **attributes}
+        with self.span(f"verification.{verification_type}", SpanType.VERIFICATION, **attrs) as s:
+            yield s
+
+    @contextmanager
+    def supervision_span(
+        self,
+        pattern: str = "",
+        level: str = "",
+        **attributes: Any,
+    ) -> Generator[Span, None, None]:
+        """监督节点 Span（循环检测/干预决策）"""
+        attrs = {"pattern": pattern, "level": level, **attributes}
+        with self.span(f"supervision.{pattern}", SpanType.SUPERVISION, **attrs) as s:
+            yield s
+
+    @contextmanager
+    def delegation_span(
+        self,
+        from_agent: str = "",
+        to_agent: str = "",
+        **attributes: Any,
+    ) -> Generator[Span, None, None]:
+        """委派节点 Span（多 Agent 委派）"""
+        attrs = {"from_agent": from_agent, "to_agent": to_agent, **attributes}
+        with self.span("delegation.agent", SpanType.DELEGATION, **attrs) as s:
+            yield s
+
+    def record_decision(
+        self,
+        decision_type: str,
+        reasoning: str = "",
+        outcome: str = "",
+        **metadata: Any,
+    ) -> None:
+        """快速记录一个决策事件（非上下文管理器，用于轻量追踪模式）"""
+        if not self._enabled:
+            return
+        span = self.start_span(
+            f"decision.{decision_type}",
+            SpanType.DECISION,
+            decision_type=decision_type,
+            reasoning=reasoning[:500] if reasoning else "",
+            outcome=outcome,
+            **metadata,
+        )
+        span.finish()
 
     # ==================== 非上下文管理器 API ====================
     # 用于 run() 等多返回路径的场景

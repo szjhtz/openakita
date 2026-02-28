@@ -103,6 +103,9 @@ class PromptAssembler:
         # 系统环境信息
         system_info = self._build_system_info()
 
+        # 环境快照 (Agent Harness)
+        env_snapshot = self.build_environment_snapshot()
+
         # 工具使用指南
         tools_guide = self._build_tools_guide()
 
@@ -112,6 +115,7 @@ class PromptAssembler:
         return f"""{base_prompt}
 
 {system_info}
+{env_snapshot}
 {skill_catalog}
 {mcp_catalog}
 {memory_context}
@@ -230,6 +234,71 @@ class PromptAssembler:
                 lines.append(f"- **{name}**: {desc}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def build_environment_snapshot(
+        *,
+        plan_section: str = "",
+        budget_summary: dict | None = None,
+        recent_errors: list[str] | None = None,
+        scratchpad_summary: str = "",
+    ) -> str:
+        """
+        构建环境快照 (Agent Harness: Environment Snapshot)。
+
+        在任务开始时确定性地生成环境信息，减少 Agent 用工具探索环境的 token 消耗。
+        注入到 system_prompt 中，放在系统信息之后。
+        """
+        parts = ["## 环境快照"]
+
+        # 顶层文件树（工作目录已在 _build_system_info 中输出，此处不重复）
+        try:
+            cwd = os.getcwd()
+            entries = sorted(os.listdir(cwd))[:30]
+            dirs = [e for e in entries if os.path.isdir(os.path.join(cwd, e)) and not e.startswith(".")]
+            files = [e for e in entries if os.path.isfile(os.path.join(cwd, e)) and not e.startswith(".")]
+            if dirs:
+                parts.append(f"- 子目录: {', '.join(dirs[:15])}")
+            if files:
+                parts.append(f"- 根文件: {', '.join(files[:10])}")
+        except Exception:
+            pass
+
+        # Plan 状态
+        if plan_section:
+            parts.append(f"\n### 当前计划\n{plan_section}")
+
+        # 预算状态
+        if budget_summary:
+            budget_parts = []
+            tokens = budget_summary.get("tokens_used", 0)
+            iterations = budget_summary.get("iterations_used", 0)
+            elapsed = budget_summary.get("elapsed_seconds", 0)
+            limits = budget_summary.get("limits", {})
+
+            if tokens:
+                max_t = limits.get("max_tokens", 0)
+                budget_parts.append(f"tokens: {tokens}" + (f"/{max_t}" if max_t else ""))
+            if iterations:
+                max_i = limits.get("max_iterations", 0)
+                budget_parts.append(f"iterations: {iterations}" + (f"/{max_i}" if max_i else ""))
+            if elapsed > 0:
+                budget_parts.append(f"elapsed: {elapsed:.0f}s")
+
+            if budget_parts:
+                parts.append(f"- 资源使用: {', '.join(budget_parts)}")
+
+        # 最近错误
+        if recent_errors:
+            parts.append("\n### 最近错误")
+            for err in recent_errors[-3:]:
+                parts.append(f"- {err[:200]}")
+
+        # 工作记忆
+        if scratchpad_summary:
+            parts.append(f"\n### 工作记忆\n{scratchpad_summary}")
+
+        return "\n".join(parts)
 
     @staticmethod
     def _build_system_info() -> str:

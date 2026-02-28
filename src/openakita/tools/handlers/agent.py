@@ -83,12 +83,18 @@ class AgentToolHandler:
             f"[AgentToolHandler] Delegation: {current_agent} -> {agent_id} | reason={reason}"
         )
 
+        # Agent Harness: context isolation — build task-focused message
+        # instead of relying on the sub-agent seeing full session history
+        isolated_message = message
+        if reason:
+            isolated_message = f"[委派任务] {message}\n[委派原因] {reason}"
+
         try:
             result = await orchestrator.delegate(
                 session=session,
                 from_agent=current_agent,
                 to_agent=agent_id,
-                message=message,
+                message=isolated_message,
                 reason=reason,
             )
             return str(result)

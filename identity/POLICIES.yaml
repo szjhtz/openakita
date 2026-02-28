@@ -1,0 +1,40 @@
+# Agent Harness: 策略配置文件
+# 集中管理工具权限、路径限制、Shell 命令黑名单等安全策略。
+
+# 工具级策略
+tool_policies:
+  - tool_name: "run_shell"
+    require_confirmation: false
+    dangerous_patterns:
+      - 'rm\s+-rf\s+/'
+      - 'format\s+'
+      - 'del\s+/[sS]'
+      - 'rmdir\s+/[sS]'
+      - 'mkfs\.'
+      - 'dd\s+if='
+
+# 范围策略
+scope_policy:
+  # 路径白名单（为空则不限制；非空则只允许匹配的路径）
+  allowed_paths: []
+
+  # 路径黑名单
+  blocked_paths:
+    - "/etc/shadow"
+    - "/etc/passwd"
+    - "C:/Windows/System32/*"
+
+  # Shell 命令黑名单（只匹配命令名，不含参数）
+  blocked_commands:
+    - reg
+    - regedit
+    - netsh
+    - schtasks
+    - sc
+    - wmic
+    - bcdedit
+    - shutdown
+    - taskkill
+
+# 自动确认模式（true = 跳过危险操作确认）
+auto_confirm: false

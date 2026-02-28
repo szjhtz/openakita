@@ -833,6 +833,83 @@ class ContextManager:
 
         return result
 
+    @staticmethod
+    def rewrite_after_compression(
+        messages: list[dict],
+        *,
+        plan_section: str = "",
+        scratchpad_summary: str = "",
+        completed_tools: list[str] | None = None,
+        task_description: str = "",
+    ) -> list[dict]:
+        """
+        上下文压缩后的 Prompt 重写 (Agent Harness: Context Rewriting)。
+
+        在压缩完成后注入结构化方向提示，防止 Agent 在压缩后"失忆"。
+        通过确定性规则（不用 LLM）重新注入关键信息。
+
+        Args:
+            messages: 压缩后的消息列表
+            plan_section: 当前 Plan 状态文本（来自 PlanHandler.get_plan_prompt_section）
+            scratchpad_summary: 工作记忆摘要（来自 Scratchpad）
+            completed_tools: 已执行的工具列表
+            task_description: 原始任务描述
+        """
+        if not messages:
+            return messages
+
+        rewrite_parts: list[str] = []
+
+        rewrite_parts.append("[上下文压缩后状态恢复]")
+
+        if task_description:
+            preview = task_description[:300]
+            if len(task_description) > 300:
+                preview += "..."
+            rewrite_parts.append(f"原始任务: {preview}")
+
+        if plan_section:
+            rewrite_parts.append(f"\n当前计划状态:\n{plan_section}")
+
+        if completed_tools:
+            unique_tools = list(dict.fromkeys(completed_tools))
+            tools_summary = ", ".join(unique_tools[-10:])
+            rewrite_parts.append(f"已使用工具: {tools_summary}")
+
+        if scratchpad_summary:
+            rewrite_parts.append(f"\n工作记忆:\n{scratchpad_summary}")
+
+        rewrite_parts.append(
+            "\n请基于以上信息继续推进任务。"
+            "之前的对话已被压缩为摘要，请直接继续执行下一步操作。"
+        )
+
+        rewrite_text = "\n".join(rewrite_parts)
+
+        # 找到压缩后消息中最后一条 user 消息，在其后追加重写提示
+        # 或者在消息列表末尾追加
+        result = list(messages)
+        last_user_idx = -1
+        for i in range(len(result) - 1, -1, -1):
+            if result[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx >= 0:
+            content = result[last_user_idx].get("content", "")
+            if isinstance(content, str):
+                result[last_user_idx] = {
+                    **result[last_user_idx],
+                    "content": content + f"\n\n{rewrite_text}",
+                }
+            else:
+                result.append({"role": "user", "content": rewrite_text})
+        else:
+            result.append({"role": "user", "content": rewrite_text})
+
+        logger.info("[ContextRewriter] Injected post-compression orientation prompt")
+        return result
+
     def _hard_truncate_if_needed(
         self, messages: list[dict], hard_limit: int, memory_manager: object | None = None
     ) -> list[dict]:

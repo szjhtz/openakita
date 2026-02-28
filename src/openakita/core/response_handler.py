@@ -172,16 +172,34 @@ class ResponseHandler:
         """
         delivery_receipts = delivery_receipts or []
 
-        # === Quick completion check (evidence-based) ===
-        if "deliver_artifacts" in (executed_tools or []):
-            delivered = [r for r in delivery_receipts if r.get("status") == "delivered"]
-            if delivered:
-                logger.info(f"[TaskVerify] deliver_artifacts delivered={len(delivered)}, completed")
-                return True
+        # === Deterministic Validation (Agent Harness) ===
+        try:
+            from .validators import ValidationContext, ValidationResult, create_default_registry
 
-        if "complete_plan" in (executed_tools or []):
-            logger.info("[TaskVerify] complete_plan executed, completed")
-            return True
+            val_context = ValidationContext(
+                user_request=user_request,
+                assistant_response=assistant_response,
+                executed_tools=executed_tools or [],
+                delivery_receipts=delivery_receipts,
+                conversation_id=conversation_id or "",
+            )
+            registry = create_default_registry()
+            report = registry.run_all(val_context)
+
+            if report.applicable_count > 0:
+                for output in report.outputs:
+                    if output.result == ValidationResult.PASS and output.name in (
+                        "ArtifactValidator", "CompletePlanValidator",
+                    ):
+                        logger.info(f"[TaskVerify] Deterministic PASS: {output.name} — {output.reason}")
+                        return True
+
+                for output in report.outputs:
+                    if output.result == ValidationResult.FAIL and output.name == "PlanValidator":
+                        logger.info(f"[TaskVerify] Deterministic FAIL: {output.name} — {output.reason}")
+                        return False
+        except Exception as e:
+            logger.debug(f"[TaskVerify] Deterministic validation skipped: {e}")
 
         # 宣称已交付但无证据
         if any(
@@ -189,27 +207,6 @@ class ResponseHandler:
         ) and not delivery_receipts and "deliver_artifacts" not in (executed_tools or []):
             logger.info("[TaskVerify] delivery claim without receipts, INCOMPLETE")
             return False
-
-        # Plan 步骤检查
-        # 注意: 提问暂停现在由 ask_user 工具在 ReasoningEngine ACT 阶段拦截处理，
-        # 到达此处时 ask_user 已被消费，不会出现"文本提问但未暂停"的情况。
-        try:
-            from ..tools.handlers.plan import get_plan_handler_for_session, has_active_plan
-
-            if conversation_id and has_active_plan(conversation_id):
-                handler = get_plan_handler_for_session(conversation_id)
-                plan = handler.get_plan_for(conversation_id) if handler else None
-                if plan:
-                    steps = plan.get("steps", [])
-                    pending = [s for s in steps if s.get("status") in ("pending", "in_progress")]
-                    if pending:
-                        pending_ids = [s.get("id", "?") for s in pending[:3]]
-                        logger.info(
-                            f"[TaskVerify] Plan has {len(pending)} pending steps: {pending_ids}"
-                        )
-                        return False
-        except Exception:
-            pass
 
         # LLM 判断
         verify_prompt = f"""请判断以下交互是否已经**完成**用户的意图。
@@ -264,6 +261,19 @@ NEXT: 建议的下一步"""
             logger.info(
                 f"[TaskVerify] request={user_request[:50]}... result={'COMPLETED' if is_completed else 'INCOMPLETE'}"
             )
+
+            # Decision Trace: 记录验证决策
+            try:
+                from ..tracing.tracer import get_tracer
+                tracer = get_tracer()
+                tracer.record_decision(
+                    decision_type="task_verification",
+                    reasoning=f"tools={executed_tools}, receipts={len(delivery_receipts)}",
+                    outcome="completed" if is_completed else "incomplete",
+                )
+            except Exception:
+                pass
+
             return is_completed
 
         except Exception as e:
