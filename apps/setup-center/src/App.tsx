@@ -7728,37 +7728,6 @@ export function App() {
               >
                 {t("onboarding.welcome.start")}
               </button>
-              <button
-                className="obLinkBtn"
-                onClick={async () => {
-                  // 确保工作区存在（与 Quick/Full 模式行为统一）
-                  if (!currentWorkspaceId) {
-                    try {
-                      const wsList = await invoke<WorkspaceSummary[]>("list_workspaces");
-                      if (!wsList.length) {
-                        const ws = await invoke<WorkspaceSummary>("create_workspace", {
-                          id: "default", name: t("onboarding.defaultWorkspace") || "默认工作区", setCurrent: true,
-                        });
-                        await refreshAll();
-                        setCurrentWorkspaceId(ws.id);
-                        envLoadedForWs.current = null;
-                      } else {
-                        const cur = wsList.find((w) => w.isCurrent) || wsList[0];
-                        await invoke("set_current_workspace", { id: cur.id });
-                        await refreshAll();
-                        setCurrentWorkspaceId(cur.id);
-                        envLoadedForWs.current = null;
-                      }
-                    } catch (e) {
-                      console.warn("Onboarding advanced: auto-ensure workspace failed:", e);
-                    }
-                  }
-                  setView("wizard");
-                  setStepId("llm");
-                }}
-              >
-                {t("onboarding.welcome.advancedLink")}
-              </button>
             </div>
             {stepIndicator}
           </div>

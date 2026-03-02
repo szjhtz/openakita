@@ -717,7 +717,6 @@
       "title": "Welcome to OpenAkita",
       "desc": "Your all-in-one self-evolving AI Agent. Let's get you set up quickly.",
       "start": "Get Started",
-      "advancedLink": "Advanced user? Use the full configuration wizard",
       "envWarning": "Environment issues detected",
       "envCleaned": "Environment cleaned up",
       "serviceDetected": "Running service detected",

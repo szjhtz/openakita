@@ -2297,19 +2297,6 @@ button:disabled {
   margin-top: 8px;
 }
 
-.obLinkBtn {
-  background: none;
-  border: none;
-  color: var(--brand);
-  font-size: 13px;
-  cursor: pointer;
-  text-decoration: underline;
-  opacity: 0.7;
-}
-.obLinkBtn:hover {
-  opacity: 1;
-}
-
 .obWarning {
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.3);

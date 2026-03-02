@@ -717,7 +717,6 @@
       "title": "欢迎使用 OpenAkita",
       "desc": "全能自进化 AI Agent，让我们快速完成初始配置。",
       "start": "开始配置",
-      "advancedLink": "高级用户？使用完整配置向导",
       "envWarning": "检测到环境异常",
       "envCleaned": "环境清理完成",
       "serviceDetected": "检测到已运行的服务",
