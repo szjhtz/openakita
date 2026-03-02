@@ -1791,6 +1791,39 @@ class Agent:
         except Exception as e:
             logger.warning(f"Failed to register proactive_heartbeat task: {e}")
 
+        # 任务 4: 工作区定时备份（根据用户设置）
+        try:
+            from ..workspace.backup import read_backup_settings
+            bs = read_backup_settings(settings.project_root)
+            backup_enabled = bs.get("enabled", False) and bool(bs.get("backup_path"))
+            backup_task_id = "system_workspace_backup"
+
+            if backup_task_id not in existing_ids:
+                if backup_enabled:
+                    cron = bs.get("cron", "0 2 * * *")
+                    backup_task = ScheduledTask(
+                        id=backup_task_id,
+                        name="工作区备份",
+                        trigger_type=TriggerType.CRON,
+                        trigger_config={"cron": cron},
+                        action="system:workspace_backup",
+                        prompt="执行工作区数据备份",
+                        description="定时备份工作区配置和用户数据",
+                        task_type=TaskType.TASK,
+                        enabled=True,
+                        deletable=False,
+                        metadata={"notify_on_start": False, "notify_on_complete": False},
+                    )
+                    await self.task_scheduler.add_task(backup_task)
+                    logger.info(f"Registered system task: workspace_backup (cron={cron})")
+            else:
+                existing_bt = self.task_scheduler.get_task(backup_task_id)
+                if existing_bt and existing_bt.enabled != backup_enabled:
+                    existing_bt.enabled = backup_enabled
+                    self.task_scheduler._save_tasks()
+        except Exception as e:
+            logger.warning(f"Failed to register workspace_backup task: {e}")
+
     def _build_system_prompt(
         self, base_prompt: str, task_description: str = "", use_compiled: bool = False,
         session_type: str = "cli",

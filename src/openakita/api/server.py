@@ -41,6 +41,7 @@ from .routes import (
     skills,
     token_stats,
     upload,
+    workspace_io,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ def create_app(
     app.include_router(skills.router)
     app.include_router(token_stats.router)
     app.include_router(upload.router)
+    app.include_router(workspace_io.router)
 
     @app.get("/")
     async def root():

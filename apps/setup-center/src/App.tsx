@@ -1236,6 +1236,15 @@ export function App() {
   const [advLoading, setAdvLoading] = useState<Record<string, boolean>>({});
   const advLoadedRef = useRef(false);
 
+  // backup state
+  const [backupSettings, setBackupSettings] = useState<{
+    enabled: boolean; cron: string; backup_path: string;
+    max_backups: number; include_userdata: boolean; include_media: boolean;
+  }>({ enabled: false, cron: "0 2 * * *", backup_path: "", max_backups: 5, include_userdata: true, include_media: false });
+  const [backupHistory, setBackupHistory] = useState<Array<{ filename: string; path: string; size_bytes: number; created_at: string; manifest?: any }>>([]);
+  const [backupSettingsLoaded, setBackupSettingsLoaded] = useState(false);
+  const [backupShowHistory, setBackupShowHistory] = useState(false);
+
   // providers & models
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerSlug, setProviderSlug] = useState<string>("");
@@ -6777,6 +6786,129 @@ export function App() {
       input.click();
     }
 
+    // ── Backup functions ──
+
+    async function loadBackupSettings() {
+      const url = shouldUseHttpApi() ? httpApiBase() : null;
+      if (url) {
+        try {
+          const res = await safeFetch(`${url}/api/workspace/backup-settings`, { signal: AbortSignal.timeout(5_000) });
+          const data = await res.json();
+          if (data.settings) {
+            setBackupSettings(data.settings);
+            setBackupSettingsLoaded(true);
+          }
+        } catch { /* backend not available, use defaults */ }
+      } else {
+        // Try reading from workspace file via Tauri
+        if (currentWorkspaceId) {
+          try {
+            const content = await invoke<string>("workspace_read_file", { workspaceId: currentWorkspaceId, relativePath: "data/backup_settings.json" });
+            const parsed = JSON.parse(content);
+            setBackupSettings((prev) => ({ ...prev, ...parsed }));
+            setBackupSettingsLoaded(true);
+          } catch { /* file doesn't exist yet, use defaults */ }
+        }
+      }
+    }
+
+    async function saveBackupSettings() {
+      const url = shouldUseHttpApi() ? httpApiBase() : null;
+      if (url) {
+        try {
+          await safeFetch(`${url}/api/workspace/backup-settings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(backupSettings),
+            signal: AbortSignal.timeout(5_000),
+          });
+          setNotice(t("adv.backupSaved"));
+        } catch (e) { setError(String(e)); }
+      } else if (currentWorkspaceId) {
+        try {
+          await invoke("workspace_write_file", {
+            workspaceId: currentWorkspaceId,
+            relativePath: "data/backup_settings.json",
+            content: JSON.stringify(backupSettings, null, 2) + "\n",
+          });
+          setNotice(t("adv.backupSaved"));
+        } catch (e) { setError(String(e)); }
+      }
+    }
+
+    async function runBackupNow() {
+      if (!currentWorkspaceId) return;
+      let outputDir = backupSettings.backup_path;
+      if (!outputDir) {
+        // Use dialog to pick folder
+        try {
+          const { open } = await import("@tauri-apps/plugin-dialog");
+          const selected = await open({ directory: true, multiple: false, title: t("adv.backupPath") });
+          if (!selected) return;
+          outputDir = selected as string;
+          setBackupSettings((prev) => ({ ...prev, backup_path: outputDir }));
+        } catch (e) { setError(String(e)); return; }
+      }
+      setBusy(t("adv.backupExporting"));
+      try {
+        const apiPort = serviceStatus?.port || 18900;
+        const result = await invoke<{ status: string; path?: string; filename?: string; size_bytes?: number }>(
+          "export_workspace_backup",
+          {
+            workspaceId: currentWorkspaceId,
+            outputDir,
+            includeUserdata: backupSettings.include_userdata,
+            includeMedia: backupSettings.include_media,
+            apiPort,
+          }
+        );
+        setNotice(t("adv.backupDone", { path: result.filename || result.path || "" }));
+        loadBackupHistory();
+      } catch (e) { setError(String(e)); } finally { setBusy(null); }
+    }
+
+    async function runBackupImport() {
+      if (!currentWorkspaceId) return;
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const selected = await open({ multiple: false, title: t("adv.backupImport"), filters: [{ name: "Backup", extensions: ["zip"] }] });
+        if (!selected) return;
+        const zipPath = (typeof selected === "string" ? selected : (selected as any)?.path) as string;
+        if (!zipPath) return;
+        if (!confirm(t("adv.backupImportConfirm"))) return;
+        setBusy(t("adv.backupExporting"));
+        const apiPort = serviceStatus?.port || 18900;
+        const result = await invoke<{ status: string; restored_count?: number }>(
+          "import_workspace_backup",
+          { workspaceId: currentWorkspaceId, zipPath, apiPort }
+        );
+        setNotice(t("adv.backupImportDone", { count: result.restored_count ?? 0 }));
+      } catch (e) { setError(String(e)); } finally { setBusy(null); }
+    }
+
+    async function loadBackupHistory() {
+      const url = shouldUseHttpApi() ? httpApiBase() : null;
+      if (!url || !backupSettings.backup_path) { setBackupHistory([]); return; }
+      try {
+        const res = await safeFetch(`${url}/api/workspace/backups`, { signal: AbortSignal.timeout(5_000) });
+        const data = await res.json();
+        setBackupHistory(data.backups || []);
+      } catch { setBackupHistory([]); }
+    }
+
+    async function browseBackupPath() {
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const selected = await open({ directory: true, multiple: false, title: t("adv.backupPath") });
+        if (selected) {
+          setBackupSettings((prev) => ({ ...prev, backup_path: selected as string }));
+        }
+      } catch (e) { setError(String(e)); }
+    }
+
+    // Load backup settings on first render
+    if (!backupSettingsLoaded) { loadBackupSettings(); }
+
     const sectionHeader = (key: string, title: string) => (
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0" }}>
         <span style={{ fontWeight: 600, fontSize: 14 }}>{title}</span>
@@ -6868,15 +7000,141 @@ export function App() {
             </div>
         </div>
 
-        {/* ── 配置导出/导入 ── */}
+        {/* ── .env 导出/导入（保留旧功能） ── */}
         <div className="card" style={{ marginTop: 12 }}>
-          {sectionHeader("backup", t("adv.backupTitle"))}
+          {sectionHeader("envio", t("adv.export").replace(" .env", "") + " / " + t("adv.import").replace(" .env", "") + " .env")}
             <div style={{ paddingLeft: 22 }}>
-              <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.backupHint")}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btnSmall" onClick={exportEnv} disabled={!currentWorkspaceId || !!busy}>{t("adv.export")}</button>
                 <button className="btnSmall" onClick={importEnv} disabled={!currentWorkspaceId || !!busy}>{t("adv.import")}</button>
               </div>
+            </div>
+        </div>
+
+        {/* ── 数据备份与恢复 ── */}
+        <div className="card" style={{ marginTop: 12 }}>
+          {sectionHeader("backup", t("adv.backupTitle"))}
+            <div style={{ paddingLeft: 22 }}>
+              <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.backupHint")}</div>
+
+              {/* 定时备份开关 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "10px 0" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
+                  <input type="checkbox" checked={backupSettings.enabled} onChange={(e) => setBackupSettings((p) => ({ ...p, enabled: e.target.checked }))} />
+                  {t("adv.backupEnabled")}
+                </label>
+              </div>
+
+              {/* 备份路径 */}
+              <div style={{ margin: "8px 0" }}>
+                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: "var(--muted)" }}>{t("adv.backupPath")}</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    value={backupSettings.backup_path}
+                    onChange={(e) => setBackupSettings((p) => ({ ...p, backup_path: e.target.value }))}
+                    placeholder={t("adv.backupPathPlaceholder")}
+                    style={{ flex: 1, fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--bg)", color: "var(--fg)" }}
+                  />
+                  <button className="btnSmall" onClick={browseBackupPath} disabled={!!busy}>{t("adv.backupBrowse")}</button>
+                </div>
+              </div>
+
+              {/* 备份频率 */}
+              {backupSettings.enabled && (
+                <div style={{ margin: "8px 0" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: "var(--muted)" }}>{t("adv.backupSchedule")}</div>
+                  <select
+                    value={backupSettings.cron === "0 2 * * *" ? "daily" : backupSettings.cron === "0 2 * * 0" ? "weekly" : "custom"}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "daily") setBackupSettings((p) => ({ ...p, cron: "0 2 * * *" }));
+                      else if (v === "weekly") setBackupSettings((p) => ({ ...p, cron: "0 2 * * 0" }));
+                    }}
+                    style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--bg)", color: "var(--fg)" }}
+                  >
+                    <option value="daily">{t("adv.backupScheduleDaily")}</option>
+                    <option value="weekly">{t("adv.backupScheduleWeekly")}</option>
+                    <option value="custom">{t("adv.backupScheduleCustom")}</option>
+                  </select>
+                  {backupSettings.cron !== "0 2 * * *" && backupSettings.cron !== "0 2 * * 0" && (
+                    <input
+                      type="text"
+                      value={backupSettings.cron}
+                      onChange={(e) => setBackupSettings((p) => ({ ...p, cron: e.target.value }))}
+                      style={{ marginLeft: 8, fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--bg)", color: "var(--fg)", width: 140 }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* 保留备份数 */}
+              <div style={{ margin: "8px 0" }}>
+                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4, color: "var(--muted)" }}>{t("adv.backupMaxKeep")}</div>
+                <input
+                  type="number"
+                  min={1} max={100}
+                  value={backupSettings.max_backups}
+                  onChange={(e) => setBackupSettings((p) => ({ ...p, max_backups: Math.max(1, parseInt(e.target.value) || 5) }))}
+                  style={{ fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--bg)", color: "var(--fg)", width: 80 }}
+                />
+              </div>
+
+              {/* 数据选项 */}
+              <div style={{ display: "flex", gap: 16, margin: "10px 0", flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
+                  <input type="checkbox" checked={backupSettings.include_userdata} onChange={(e) => setBackupSettings((p) => ({ ...p, include_userdata: e.target.checked }))} />
+                  {t("adv.backupIncludeUserdata")}
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
+                  <input type="checkbox" checked={backupSettings.include_media} onChange={(e) => setBackupSettings((p) => ({ ...p, include_media: e.target.checked }))} />
+                  {t("adv.backupIncludeMedia")}
+                </label>
+              </div>
+
+              {/* 操作按钮 */}
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                <button className="btnSmall btnSmallPrimary" onClick={async () => { await saveBackupSettings(); }} disabled={!!busy}>
+                  {t("common.save") || "保存设置"}
+                </button>
+                <button className="btnSmall" onClick={runBackupNow} disabled={!currentWorkspaceId || !!busy}>
+                  {t("adv.backupNow")}
+                </button>
+                <button className="btnSmall" onClick={runBackupImport} disabled={!currentWorkspaceId || !!busy}>
+                  {t("adv.backupImport")}
+                </button>
+              </div>
+
+              {/* 历史备份列表 */}
+              {backupSettings.backup_path && (
+                <div style={{ marginTop: 14 }}>
+                  <div
+                    style={{ fontSize: 13, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                    onClick={() => { setBackupShowHistory((p) => !p); if (!backupShowHistory) loadBackupHistory(); }}
+                  >
+                    <span style={{ transform: backupShowHistory ? "rotate(90deg)" : "rotate(0)", transition: "transform 0.15s", display: "inline-block" }}>▸</span>
+                    {t("adv.backupHistory")}
+                  </div>
+                  {backupShowHistory && (
+                    <div style={{ marginTop: 6 }}>
+                      {backupHistory.length === 0 ? (
+                        <div className="cardHint" style={{ fontSize: 12 }}>{t("adv.backupNoHistory")}</div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {backupHistory.map((b) => (
+                            <div key={b.filename} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 8px", borderRadius: 6, background: "var(--bg)" }}>
+                              <span style={{ fontFamily: "monospace" }}>{b.filename}</span>
+                              <span style={{ color: "var(--muted)", whiteSpace: "nowrap", marginLeft: 12 }}>
+                                {(b.size_bytes / 1024 / 1024).toFixed(1)} MB
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
         </div>
       </>

@@ -442,6 +442,7 @@ class TaskExecutor:
         - system:daily_memory - 每日记忆整理
         - system:daily_selfcheck - 每日系统自检
         - system:proactive_heartbeat - 活人感心跳
+        - system:workspace_backup - 定时工作区备份
         """
         action = task.action
         logger.info(f"Executing system task: {action}")
@@ -455,6 +456,9 @@ class TaskExecutor:
 
             elif action == "system:proactive_heartbeat":
                 return await self._system_proactive_heartbeat(task)
+
+            elif action == "system:workspace_backup":
+                return await self._system_workspace_backup()
 
             else:
                 return False, f"Unknown system action: {action}"
@@ -732,6 +736,36 @@ class TaskExecutor:
 
         except Exception as e:
             logger.error(f"Daily selfcheck failed: {e}")
+            return False, str(e)
+
+    async def _system_workspace_backup(self) -> tuple[bool, str]:
+        """执行定时工作区备份。"""
+        try:
+            from ..config import settings
+            from ..workspace.backup import create_backup, read_backup_settings
+
+            ws_path = settings.project_root
+            bs = read_backup_settings(ws_path)
+
+            backup_path = bs.get("backup_path", "")
+            if not backup_path:
+                return False, "Backup path not configured"
+
+            zip_path = create_backup(
+                workspace_path=ws_path,
+                output_dir=backup_path,
+                include_userdata=bs.get("include_userdata", True),
+                include_media=bs.get("include_media", False),
+                max_backups=bs.get("max_backups", 5),
+            )
+
+            size_mb = zip_path.stat().st_size / 1024 / 1024
+            summary = f"工作区备份完成: {zip_path.name} ({size_mb:.1f} MB)"
+            logger.info(summary)
+            return True, summary
+
+        except Exception as e:
+            logger.error(f"Workspace backup failed: {e}")
             return False, str(e)
 
     def _find_all_im_targets(self) -> list[tuple[str, str]]:
