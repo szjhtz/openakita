@@ -18,11 +18,30 @@ from pathlib import Path
 
 def _bundled_python_env(internal_dir: Path) -> dict:
     """Build environment dict for invoking standalone _internal/python.exe."""
-    _ = internal_dir  # keep signature stable for callers
     env = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
                 "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV"):
         env.pop(key, None)
+
+    # Windows onedir python.exe often needs explicit path hints so stdlib bootstrap
+    # modules (runpy/importlib) can be resolved from bundled files.
+    if sys.platform == "win32":
+        parts = []
+        base_lib = internal_dir / "base_library.zip"
+        if base_lib.exists():
+            parts.append(str(base_lib))
+        py_zip = internal_dir / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        if py_zip.exists():
+            parts.append(str(py_zip))
+        parts.append(str(internal_dir))
+        lib = internal_dir / "Lib"
+        if lib.is_dir():
+            parts.append(str(lib))
+        dlls = internal_dir / "DLLs"
+        if dlls.is_dir():
+            parts.append(str(dlls))
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+
     # Let bundled interpreter decide its own stdlib path layout.
     # Forcing PYTHONHOME/PYTHONPATH may break importlib on Linux/macOS bundles.
     env["PYTHONNOUSERSITE"] = "1"
