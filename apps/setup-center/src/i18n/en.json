@@ -856,9 +856,6 @@
   },
   "adv": {
     "diagnosing": "Diagnosing Python environment...",
-    "resetting": "Resetting runtime environment...",
-    "resetDone": "Runtime environment reset. Please run diagnostics again.",
-    "resetConfirm": "Are you sure you want to reset the runtime? This cleans up runtime cache and may require reinstalling OpenAkita.",
     "needService": "Backend service must be running",
     "copied": "Copied to clipboard",
     "cleaning": "Cleaning up...",
@@ -873,7 +870,6 @@
     "diagnose": "Diagnose",
     "exportDiagReport": "Export Diagnostic Report",
     "diagReportExported": "Diagnostic report exported: {{path}}",
-    "reset": "Reset Environment",
     "logTitle": "Service Logs",
     "logNeedService": "Backend service not running, cannot fetch logs",
     "logRefresh": "Refresh",

@@ -856,9 +856,6 @@
   },
   "adv": {
     "diagnosing": "正在诊断 Python 环境...",
-    "resetting": "正在重置运行环境...",
-    "resetDone": "运行环境已重置，请重新执行诊断",
-    "resetConfirm": "确定要重置运行环境？将清理运行时缓存，可能需要重新安装 OpenAkita。",
     "needService": "需要后端服务运行中",
     "copied": "已复制到剪贴板",
     "cleaning": "正在清理...",
@@ -873,7 +870,6 @@
     "diagnose": "诊断",
     "exportDiagReport": "导出诊断报告",
     "diagReportExported": "诊断报告已导出：{{path}}",
-    "reset": "重置环境",
     "logTitle": "服务日志",
     "logNeedService": "后端服务未运行，无法获取日志",
     "logRefresh": "刷新",

@@ -1989,7 +1989,6 @@ fn main() {
             create_venv,
             pip_install,
             pip_uninstall,
-            remove_openakita_runtime,
             autostart_is_enabled,
             autostart_set_enabled,
             openakita_service_status,
@@ -3645,24 +3644,6 @@ async fn pip_uninstall(venv_dir: String, package_name: String) -> Result<String,
         Ok("ok".into())
     })
     .await
-}
-
-#[tauri::command]
-fn remove_openakita_runtime(remove_venv: bool, remove_embedded_python: bool) -> Result<String, String> {
-    let root = openakita_root_dir();
-    if remove_venv {
-        let venv = root.join("venv");
-        if venv.exists() {
-            fs::remove_dir_all(&venv).map_err(|e| format!("remove venv failed: {e}"))?;
-        }
-    }
-    if remove_embedded_python {
-        let rt = runtime_dir();
-        if rt.exists() {
-            fs::remove_dir_all(&rt).map_err(|e| format!("remove runtime failed: {e}"))?;
-        }
-    }
-    Ok("ok".into())
 }
 
 fn run_python_module_json(

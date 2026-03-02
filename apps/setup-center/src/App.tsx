@@ -6563,15 +6563,6 @@ export function App() {
       }
     }
 
-    async function runReset(removeVenv: boolean, removeEmbedded: boolean) {
-      setBusy(t("adv.resetting"));
-      try {
-        await invoke<string>("remove_openakita_runtime", { removeVenv: removeVenv, removeEmbeddedPython: removeEmbedded });
-        setPyDiag(null);
-        setNotice(t("adv.resetDone"));
-      } catch (e) { setError(String(e)); } finally { setBusy(null); }
-    }
-
     async function fetchSystemInfo() {
       const url = shouldUseHttpApi() ? httpApiBase() : null;
       if (!url) { setError(t("adv.needService")); return; }
@@ -6646,9 +6637,6 @@ export function App() {
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                 <button className="btnSmall" onClick={runDiagnose} disabled={!!busy}>{t("adv.diagnose")}</button>
                 <button className="btnSmall" onClick={runExportDiagReport} disabled={!!busy}>{t("adv.exportDiagReport")}</button>
-                <button className="btnSmall btnSmallDanger" onClick={() => {
-                  if (confirm(t("adv.resetConfirm"))) runReset(true, true);
-                }} disabled={!!busy}>{t("adv.reset")}</button>
               </div>
             </div>
         </div>
