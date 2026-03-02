@@ -4679,50 +4679,32 @@ fn windows_add_to_path(bin_dir: &Path) -> Result<(), String> {
     use winreg::RegKey;
 
     let bin_str = bin_dir.to_string_lossy().to_string();
+    let bin_norm = bin_str.trim_end_matches('\\');
 
-    // 尝试 HKLM (perMachine), 如果权限不够降级到 HKCU (currentUser)
-    let (hive, subkey) = {
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        let sys_env = hklm.open_subkey_with_flags(
-            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-            KEY_READ | KEY_WRITE,
-        );
-        if let Ok(key) = sys_env {
-            (key, "system")
-        } else {
-            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-            let user_env = hkcu
-                .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
-                .map_err(|e| format!("无法打开用户环境变量注册表: {e}"))?;
-            (user_env, "user")
-        }
-    };
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu
+        .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
+        .map_err(|e| format!("无法打开用户环境变量注册表: {e}"))?;
 
-    // 读取当前 PATH
-    let current_path: String = hive.get_value("Path").unwrap_or_default();
+    let current_path = read_path_value(&key)?;
 
-    // 检查是否已存在
-    let separator = ";";
-    let paths: Vec<&str> = current_path.split(separator).collect();
-    if paths.iter().any(|p| p.eq_ignore_ascii_case(&bin_str)) {
-        return Ok(()); // 已存在，无需重复添加
+    if current_path
+        .split(';')
+        .any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(bin_norm))
+    {
+        return Ok(());
     }
 
-    // 检查 PATH 长度限制
     let new_path = if current_path.is_empty() {
-        bin_str.clone()
+        bin_str
     } else {
-        format!("{}{}{}", current_path, separator, bin_str)
+        format!("{};{}", current_path, bin_str)
     };
     if new_path.len() > 2047 {
         return Err("PATH 环境变量已接近长度限制 (2048)，无法追加".into());
     }
 
-    // 写入注册表 (REG_EXPAND_SZ type to support %...% variables)
-    hive.set_value("Path", &new_path)
-        .map_err(|e| format!("写入 PATH 注册表失败 ({}): {e}", subkey))?;
-
-    // 广播 WM_SETTINGCHANGE
+    write_path_value(&key, &new_path)?;
     windows_broadcast_env_change();
 
     Ok(())
@@ -4734,26 +4716,37 @@ fn windows_remove_from_path(bin_dir: &Path) -> Result<(), String> {
     use winreg::RegKey;
 
     let bin_str = bin_dir.to_string_lossy().to_string();
-    let separator = ";";
+    let bin_norm = bin_str.trim_end_matches('\\');
+    let mut modified = false;
 
-    // 尝试系统和用户两个位置
     for (hive_predef, subkey_path) in [
         (HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
         (HKEY_CURRENT_USER, "Environment"),
     ] {
         let hive = RegKey::predef(hive_predef);
         if let Ok(key) = hive.open_subkey_with_flags(subkey_path, KEY_READ | KEY_WRITE) {
-            let current_path: String = key.get_value("Path").unwrap_or_default();
+            let current_path = read_path_value(&key).unwrap_or_default();
+            if current_path.is_empty() {
+                continue;
+            }
             let new_paths: Vec<&str> = current_path
-                .split(separator)
-                .filter(|p| !p.eq_ignore_ascii_case(&bin_str) && !p.is_empty())
+                .split(';')
+                .filter(|p| {
+                    !p.trim_end_matches('\\')
+                        .eq_ignore_ascii_case(bin_norm)
+                })
                 .collect();
-            let new_path = new_paths.join(separator);
-            let _ = key.set_value("Path", &new_path);
+            let new_path = new_paths.join(";");
+            if new_path != current_path {
+                let _ = write_path_value(&key, &new_path);
+                modified = true;
+            }
         }
     }
 
-    windows_broadcast_env_change();
+    if modified {
+        windows_broadcast_env_change();
+    }
     Ok(())
 }
 
@@ -4763,6 +4756,7 @@ fn windows_is_in_path(bin_dir: &Path) -> bool {
     use winreg::RegKey;
 
     let bin_str = bin_dir.to_string_lossy().to_string();
+    let bin_norm = bin_str.trim_end_matches('\\');
 
     for (hive_predef, subkey_path) in [
         (HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
@@ -4770,12 +4764,13 @@ fn windows_is_in_path(bin_dir: &Path) -> bool {
     ] {
         let hive = RegKey::predef(hive_predef);
         if let Ok(key) = hive.open_subkey_with_flags(subkey_path, KEY_READ) {
-            let current_path: String = key.get_value("Path").unwrap_or_default();
-            if current_path
-                .split(';')
-                .any(|p| p.eq_ignore_ascii_case(&bin_str))
-            {
-                return true;
+            if let Ok(current_path) = read_path_value(&key) {
+                if current_path
+                    .split(';')
+                    .any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(bin_norm))
+                {
+                    return true;
+                }
             }
         }
     }
@@ -4812,6 +4807,45 @@ fn windows_broadcast_env_change() {
             &mut result,
         );
     }
+}
+
+/// 从注册表中读取 PATH 值的原始内容（不展开 %...% 环境变量引用）
+#[cfg(target_os = "windows")]
+fn read_path_value(key: &winreg::RegKey) -> Result<String, String> {
+    use winreg::enums::RegType;
+    match key.get_raw_value("Path") {
+        Ok(raw) => {
+            if raw.vtype != RegType::REG_SZ && raw.vtype != RegType::REG_EXPAND_SZ {
+                return Err(format!("PATH 注册表值类型异常: {:?}", raw.vtype));
+            }
+            let wide: Vec<u16> = raw
+                .bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            Ok(String::from_utf16_lossy(&wide)
+                .trim_end_matches('\0')
+                .to_string())
+        }
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// 将 PATH 值以 REG_EXPAND_SZ 类型写入注册表（保留 %...% 环境变量引用能力）
+#[cfg(target_os = "windows")]
+fn write_path_value(key: &winreg::RegKey, value: &str) -> Result<(), String> {
+    use winreg::enums::RegType;
+    use winreg::RegValue;
+    let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes: Vec<u8> = wide.iter().flat_map(|&w| w.to_le_bytes()).collect();
+    key.set_raw_value(
+        "Path",
+        &RegValue {
+            bytes,
+            vtype: RegType::REG_EXPAND_SZ,
+        },
+    )
+    .map_err(|e| format!("写入 PATH 注册表失败: {e}"))
 }
 
 // ── PATH 操作：macOS / Linux ──

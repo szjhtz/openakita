@@ -1112,34 +1112,15 @@ Section Install
    FileClose $R4
   ${EndIf}
 
-  ; 添加到 PATH
+  ; 添加到 PATH（通过 PowerShell 安全操作，避免 NSIS 字符串截断和类型变更问题）
   ${If} $R3 = ${BST_CHECKED}
-   ; 读取当前 PATH 并检查是否已包含 bin 目录
+   !insertmacro _OpenAkita_WritePathHelper
    !if "${INSTALLMODE}" == "perMachine"
-    ReadRegStr $R5 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+    ExecWait 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\_oa_pathhelper.ps1" -Action add -BinDir "$INSTDIR\bin" -RegPath "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"' $R9
    !else
-    ReadRegStr $R5 HKCU "Environment" "Path"
+    ExecWait 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\_oa_pathhelper.ps1" -Action add -BinDir "$INSTDIR\bin" -RegPath "HKCU:\Environment"' $R9
    !endif
-
-   ; 检查 PATH 中是否已包含 $INSTDIR\bin
-   ${StrLoc} $R6 $R5 "$INSTDIR\bin" ">"
-   ${If} $R6 == ""
-    ; 不存在，追加到 PATH
-    ${If} $R5 != ""
-     StrCpy $R5 "$R5;$INSTDIR\bin"
-    ${Else}
-     StrCpy $R5 "$INSTDIR\bin"
-    ${EndIf}
-
-    !if "${INSTALLMODE}" == "perMachine"
-     WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" $R5
-    !else
-     WriteRegExpandStr HKCU "Environment" "Path" $R5
-    !endif
-
-    ; 广播 WM_SETTINGCHANGE 通知其他进程 PATH 已更新
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
-   ${EndIf}
+   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   ${EndIf}
 
   ; 保存 INSTDIR 到注册表（卸载时需要知道 bin 目录位置）
@@ -1228,28 +1209,14 @@ Section Uninstall
 
 
  ; ── CLI 命令行工具清理 ──
- ; 从 PATH 中移除 $INSTDIR\bin
+ ; 从 PATH 中移除 bin 目录（通过 PowerShell 安全操作，逐条精确匹配避免误删）
  ReadRegStr $R8 HKCU "Software\OpenAkita\CLI" "binDir"
  ${If} $R8 != ""
+  !insertmacro _OpenAkita_WritePathHelper
   ; 从系统 PATH 移除
-  ReadRegStr $R5 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-  ${If} $R5 != ""
-   ; 移除 ";$R8" 或 "$R8;" 或单独的 "$R8"
-   ${WordReplace} $R5 ";$R8" "" "+" $R5
-   ${WordReplace} $R5 "$R8;" "" "+" $R5
-   ${WordReplace} $R5 "$R8" "" "+" $R5
-   WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" $R5
-  ${EndIf}
-
+  ExecWait 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\_oa_pathhelper.ps1" -Action remove -BinDir "$R8" -RegPath "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"' $R9
   ; 从用户 PATH 移除
-  ReadRegStr $R5 HKCU "Environment" "Path"
-  ${If} $R5 != ""
-   ${WordReplace} $R5 ";$R8" "" "+" $R5
-   ${WordReplace} $R5 "$R8;" "" "+" $R5
-   ${WordReplace} $R5 "$R8" "" "+" $R5
-   WriteRegExpandStr HKCU "Environment" "Path" $R5
-  ${EndIf}
-
+  ExecWait 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\_oa_pathhelper.ps1" -Action remove -BinDir "$R8" -RegPath "HKCU:\Environment"' $R9
   ; 广播 WM_SETTINGCHANGE
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
  ${EndIf}
