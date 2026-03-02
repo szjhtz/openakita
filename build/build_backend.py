@@ -72,6 +72,14 @@ def _bundled_python_env(internal_dir: Path) -> dict:
     for key in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
                 "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV"):
         env.pop(key, None)
+
+    # On macOS framework Python, forcing PYTHONHOME to _internal can break
+    # stdlib resolution (e.g. importlib) during post-build contract checks.
+    # Let the framework launcher resolve its own home.
+    if sys.platform == "darwin":
+        env["PYTHONNOUSERSITE"] = "1"
+        return env
+
     env["PYTHONHOME"] = str(internal_dir)
     parts = []
     base_lib = internal_dir / "base_library.zip"
