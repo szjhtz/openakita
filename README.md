@@ -354,24 +354,33 @@ Tracing  ─── AgentTracer(12 SpanTypes) · DecisionTrace · TokenStats
 <table>
   <tr>
     <td align="center">
-      <img src="docs/assets/person_wechat.jpg" width="200" alt="Personal WeChat QR Code" /><br/>
-      <b>WeChat (Personal)</b><br/>
-      <sub>Scan to add, note "OpenAkita" to join group</sub>
+      <img src="docs/assets/wechat_official.png" width="180" alt="WeChat Official Account" /><br/>
+      <b>WeChat Official</b><br/>
+      <sub>Follow for updates</sub>
     </td>
     <td align="center">
-      <img src="docs/assets/wechat_group.jpg" width="200" alt="WeChat Group QR Code" /><br/>
-      <b>WeChat Group</b><br/>
-      <sub>Scan to join directly (⚠️ refreshed weekly)</sub>
+      <img src="docs/assets/person_wechat.jpg" width="180" alt="Personal WeChat" /><br/>
+      <b>WeChat (Personal)</b><br/>
+      <sub>Note "OpenAkita" to join group</sub>
     </td>
-    <td>
-      <b>WeChat</b> — Scan to add friend (never expires), note "OpenAkita" to get invited<br/><br/>
-      <b>WeChat Group</b> — Scan to join directly (QR refreshed weekly)<br/><br/>
-      <b>Discord</b> — <a href="https://discord.gg/vFwxNVNH">Join Discord</a><br/><br/>
-      <b>X (Twitter)</b> — <a href="https://x.com/openakita">@openakita</a><br/><br/>
-      <b>Email</b> — <a href="mailto:zacon365@gmail.com">zacon365@gmail.com</a>
+    <td align="center">
+      <img src="docs/assets/wechat_group.jpg" width="180" alt="WeChat Group" /><br/>
+      <b>WeChat Group</b><br/>
+      <sub>Scan to join (⚠️ refreshed weekly)</sub>
+    </td>
+    <td align="center">
+      <img src="docs/assets/qq_group.png" width="180" alt="QQ Group" /><br/>
+      <b>QQ Group: 854429727</b><br/>
+      <sub>Scan or search to join</sub>
     </td>
   </tr>
 </table>
+
+<p align="center">
+  <a href="https://discord.gg/vFwxNVNH">Discord</a> · 
+  <a href="https://x.com/openakita">X (Twitter)</a> · 
+  <a href="mailto:zacon365@gmail.com">Email</a>
+</p>
 
 [Issues](https://github.com/openakita/openakita/issues) · [Discussions](https://github.com/openakita/openakita/discussions) · [Star](https://github.com/openakita/openakita)
 
