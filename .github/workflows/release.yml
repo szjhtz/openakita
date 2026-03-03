@@ -539,11 +539,17 @@ jobs:
 
                 rm -f "${dmg_file}"
 
+                # Build a staging directory with the .app and an Applications symlink
+                # so the DMG shows the standard "drag to install" layout.
+                DMG_STAGE="$(mktemp -d)"
+                cp -a "${app}" "${DMG_STAGE}/"
+                ln -s /Applications "${DMG_STAGE}/Applications"
+
                 # Retry up to 3 times (diskimages-helper may take a moment to release)
                 for attempt in 1 2 3; do
                   if hdiutil create \
                     -volname "${app_name}" \
-                    -srcfolder "${app}" \
+                    -srcfolder "${DMG_STAGE}" \
                     -ov -format UDZO \
                     "${dmg_file}"; then
                     echo "DMG recreated: ${dmg_file}"
@@ -552,6 +558,7 @@ jobs:
                   echo "hdiutil create attempt ${attempt} failed, retrying in 3s..."
                   sleep 3
                 done
+                rm -rf "${DMG_STAGE}"
               fi
             done
           fi
