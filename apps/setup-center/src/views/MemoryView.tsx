@@ -255,7 +255,7 @@ export function MemoryView({ serviceRunning }: Props) {
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => e.key === "Enter" && loadMemories()}
               style={{
-                width: "100%", padding: "6px 8px 6px 28px", border: "1px solid var(--border)",
+                width: "100%", padding: "6px 8px 6px 28px", border: "1px solid var(--line)",
                 borderRadius: 6, background: "var(--bg)", color: "var(--text)", fontSize: 13,
               }}
             />
@@ -265,7 +265,7 @@ export function MemoryView({ serviceRunning }: Props) {
             value={filterType}
             onChange={e => setFilterType(e.target.value)}
             style={{
-              padding: "6px 8px", border: "1px solid var(--border)",
+              padding: "6px 8px", border: "1px solid var(--line)",
               borderRadius: 6, background: "var(--bg)", color: "var(--text)", fontSize: 13,
             }}
           >
@@ -280,7 +280,7 @@ export function MemoryView({ serviceRunning }: Props) {
             disabled={loading}
             style={{
               display: "flex", alignItems: "center", gap: 4, padding: "6px 12px",
-              border: "1px solid var(--border)", borderRadius: 6,
+              border: "1px solid var(--line)", borderRadius: 6,
               background: "var(--bg)", color: "var(--text)", cursor: "pointer", fontSize: 13,
             }}
           >
@@ -347,7 +347,7 @@ export function MemoryView({ serviceRunning }: Props) {
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
-            <tr style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
+            <tr style={{ background: "var(--bg)", borderBottom: "1px solid var(--line)" }}>
               <th style={{ padding: "8px 12px", textAlign: "left", width: 36 }}>
                 <input
                   type="checkbox"
@@ -379,7 +379,7 @@ export function MemoryView({ serviceRunning }: Props) {
               <tr
                 key={m.id}
                 style={{
-                  borderBottom: "1px solid var(--border)",
+                  borderBottom: "1px solid var(--line)",
                   background: selected.has(m.id) ? "rgba(99,102,241,0.06)" : undefined,
                   transition: "background 0.15s",
                 }}
@@ -408,7 +408,7 @@ export function MemoryView({ serviceRunning }: Props) {
                         onChange={e => setEditContent(e.target.value)}
                         rows={3}
                         style={{
-                          width: "100%", padding: 6, border: "1px solid var(--border)",
+                          width: "100%", padding: 6, border: "1px solid var(--line)",
                           borderRadius: 4, background: "var(--bg)", color: "var(--text)",
                           fontSize: 12, resize: "vertical",
                         }}
@@ -420,7 +420,7 @@ export function MemoryView({ serviceRunning }: Props) {
                           value={editScore}
                           onChange={e => setEditScore(parseFloat(e.target.value) || 0)}
                           style={{
-                            width: 70, padding: "2px 6px", border: "1px solid var(--border)",
+                            width: 70, padding: "2px 6px", border: "1px solid var(--line)",
                             borderRadius: 4, background: "var(--bg)", color: "var(--text)", fontSize: 12,
                           }}
                         />
@@ -477,7 +477,7 @@ export function MemoryView({ serviceRunning }: Props) {
                       onClick={() => startEdit(m)}
                       title="编辑"
                       style={{
-                        background: "none", border: "1px solid var(--border)", borderRadius: 4,
+                        background: "none", border: "1px solid var(--line)", borderRadius: 4,
                         cursor: "pointer", padding: "3px 6px", color: "var(--text)",
                       }}
                     >
