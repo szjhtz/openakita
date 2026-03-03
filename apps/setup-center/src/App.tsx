@@ -5179,40 +5179,40 @@ export function App() {
               </div>
 
               {/* Footer — fixed at bottom */}
-              <div className="dialogFooter">
-                <button className="btnSecondary endpointFooterBtn" onClick={() => { setAddEpDialogOpen(false); resetEndpointEditor(); setConnTestResult(null); }}>{t("common.cancel")}</button>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <button
-                    className="btnSecondary endpointFooterBtn"
-                    disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || connTesting}
-                    onClick={() => doTestConnection({ testApiType: apiType, testBaseUrl: baseUrl, testApiKey: apiKeyValue.trim() || (isLocalProvider(selectedProvider) ? localProviderPlaceholderKey(selectedProvider) : ""), testProviderSlug: selectedProvider?.slug })}
-                  >
-                    {connTesting ? t("llm.testTesting") : t("llm.testConnection")}
-                  </button>
-                  {(() => {
-                    const _isLocal = isLocalProvider(selectedProvider);
-                    const missing: string[] = [];
-                    if (!baseUrl.trim()) missing.push("Base URL");
-                    if (!_isLocal && !apiKeyValue.trim()) missing.push("API Key");
-                    if (!selectedModelId.trim()) missing.push(t("status.model"));
-                    if (!currentWorkspaceId && dataMode !== "remote") missing.push(t("workspace.title") || "工作区");
-                    const btnDisabled = missing.length > 0 || !!busy;
-                    return (
-                      <div className="endpointPrimaryWrap">
-                        <button className="btnPrimary endpointFooterBtn" onClick={async () => { const ok = await doSaveEndpoint(); if (ok) { setAddEpDialogOpen(false); setConnTestResult(null); } }} disabled={btnDisabled}>
-                          {isEditingEndpoint ? t("common.save") : t("llm.addEndpoint")}
-                        </button>
-                        <span className="endpointPrimaryHint">
-                          {btnDisabled && !busy && missing.length > 0 ? (
-                            <>
-                            {t("common.missingFields") || "缺少"}: {missing.join(", ")}
-                            </>
-                          ) : null}
-                        </span>
+              <div className="dialogFooter" style={{ flexDirection: "column", gap: 6 }}>
+                {(() => {
+                  const _isLocal = isLocalProvider(selectedProvider);
+                  const missing: string[] = [];
+                  if (!baseUrl.trim()) missing.push("Base URL");
+                  if (!_isLocal && !apiKeyValue.trim()) missing.push("API Key");
+                  if (!selectedModelId.trim()) missing.push(t("status.model"));
+                  if (!currentWorkspaceId && dataMode !== "remote") missing.push(t("workspace.title") || "工作区");
+                  const btnDisabled = missing.length > 0 || !!busy;
+                  return (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+                        <button className="btnSecondary endpointFooterBtn" onClick={() => { setAddEpDialogOpen(false); resetEndpointEditor(); setConnTestResult(null); }}>{t("common.cancel")}</button>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            className="btnSecondary endpointFooterBtn"
+                            disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || connTesting}
+                            onClick={() => doTestConnection({ testApiType: apiType, testBaseUrl: baseUrl, testApiKey: apiKeyValue.trim() || (isLocalProvider(selectedProvider) ? localProviderPlaceholderKey(selectedProvider) : ""), testProviderSlug: selectedProvider?.slug })}
+                          >
+                            {connTesting ? t("llm.testTesting") : t("llm.testConnection")}
+                          </button>
+                          <button className="btnPrimary endpointFooterBtn" onClick={async () => { const ok = await doSaveEndpoint(); if (ok) { setAddEpDialogOpen(false); setConnTestResult(null); } }} disabled={btnDisabled}>
+                            {isEditingEndpoint ? t("common.save") : t("llm.addEndpoint")}
+                          </button>
+                        </div>
                       </div>
-                    );
-                  })()}
-                </div>
+                      {btnDisabled && !busy && missing.length > 0 && (
+                        <div className="endpointPrimaryHint" style={{ width: "100%", textAlign: "right" }}>
+                          {t("common.missingFields") || "缺少"}: {missing.join(", ")}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -6604,18 +6604,24 @@ export function App() {
         <div className="card">
           {sectionHeader("python", t("adv.pythonTitle"))}
             <div style={{ paddingLeft: 22 }}>
-              <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.pythonHint")}</div>
               {pyDiag ? (
                 <>
                   <div className="cardHint" style={{ marginBottom: 6 }}>
                     {t("adv.diagSummary")}:{" "}
                     <b>{pyDiag.summary === "healthy" ? t("adv.summaryHealthy") : t("adv.summaryBroken")}</b>
                   </div>
-                  {pyDiag.contracts.map((c) => (
-                    <div key={c.id}>
-                      {diagItem(c.title, c.status, `${c.code}${c.evidence?.[0] ? ` — ${c.evidence[0]}` : ""}`)}
-                    </div>
-                  ))}
+                  {pyDiag.contracts.map((c) => {
+                    const titleMap: Record<string, string> = {
+                      C1_BUNDLED_RUNTIME: t("adv.contractBundled"),
+                      C2_VENV_HEALTH: t("adv.contractVenv"),
+                      C3_OPENAKITA_IN_VENV: t("adv.contractOpenakita"),
+                    };
+                    return (
+                      <div key={c.id}>
+                        {diagItem(titleMap[c.id] || c.title, c.status, `${c.code}${c.evidence?.[0] ? ` — ${c.evidence[0]}` : ""}`)}
+                      </div>
+                    );
+                  })}
                   {pyDiag.contracts.some((c) => c.status !== "pass") && (
                     <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, fontSize: 12, color: "var(--warning)" }}>
                       {pyDiag.contracts.filter((c) => c.status !== "pass").map((c) => (
