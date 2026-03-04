@@ -258,10 +258,10 @@ export function IdentityView({ serviceRunning, apiBaseUrl }: Props) {
         }}>
           <IconInfo size={14} style={{ flexShrink: 0 }} />
           <span style={{ flex: 1 }}>{t("identity.pageBanner")}</span>
-          <IconX size={14} style={{ flexShrink: 0, cursor: "pointer", opacity: 0.6 }} onClick={() => {
+          <span style={{ flexShrink: 0, cursor: "pointer", opacity: 0.6, display: "inline-flex" }} onClick={() => {
             setBannerDismissed(true);
             try { localStorage.setItem("identity_banner_dismissed", "1"); } catch { /* ignore */ }
-          }} />
+          }}><IconX size={14} /></span>
         </div>
       )}
 
@@ -384,7 +384,7 @@ export function IdentityView({ serviceRunning, apiBaseUrl }: Props) {
                   alignItems: "flex-start",
                   gap: 8,
                 }}>
-                  <IconX size={14} style={{ flexShrink: 0, marginTop: 2, cursor: "pointer" }} onClick={() => setError(null)} />
+                  <span style={{ flexShrink: 0, marginTop: 2, cursor: "pointer", display: "inline-flex" }} onClick={() => setError(null)}><IconX size={14} /></span>
                   <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit" }}>{error}</pre>
                 </div>
               )}

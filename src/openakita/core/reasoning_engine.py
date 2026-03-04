@@ -3156,21 +3156,12 @@ class ReasoningEngine:
             f"text_preview=\"{(stripped_text or '')[:80].replace(chr(10), ' ')}\""
         )
 
+        # [REPLY] 允许 1 次重试（防止模型错误使用 REPLY 跳过工具调用）
+        # [ACTION] 或无标记 → 使用完整重试次数（默认 2 次）
         if intent == "REPLY":
-            # 模型明确声明纯文本回复 → 跳过 ForceToolCall 重试
-            logger.info("[IntentTag] REPLY — accepting text response, skip ForceToolCall retry")
-            cleaned = clean_llm_response(stripped_text)
-            if cleaned and cleaned.strip():
-                return cleaned
-            if stripped_text and stripped_text.strip():
-                return stripped_text
-            return (
-                "⚠️ 大模型返回异常：未产生可用输出。任务已中断。"
-                "请重试、或更换端点/模型后再执行。"
-            )
-
-        # ACTION 或无标记 → 走 ForceToolCall 重试
-        max_no_tool_retries = self._effective_force_retries(base_force_retries, conversation_id)
+            max_no_tool_retries = 1
+        else:
+            max_no_tool_retries = self._effective_force_retries(base_force_retries, conversation_id)
         no_tool_call_count += 1
 
         if no_tool_call_count <= max_no_tool_retries:
@@ -3180,7 +3171,17 @@ class ReasoningEngine:
                     "content": [{"type": "text", "text": stripped_text}],
                     "reasoning_content": decision.thinking_content or None,
                 })
-            if intent == "ACTION":
+            if intent == "REPLY":
+                logger.warning(
+                    f"[IntentTag] REPLY intent but tool_calls=0 — "
+                    f"ForceToolCall retry ({no_tool_call_count}/{max_no_tool_retries})"
+                )
+                retry_msg = (
+                    "[系统] 你声明了 [REPLY] 但系统检测到 tool_calls=0。"
+                    "如果你的回复包含即将执行的操作，请立即调用对应的工具；"
+                    "如果确实只是纯对话回复，请直接重新回复即可。"
+                )
+            elif intent == "ACTION":
                 logger.warning(
                     "[IntentTag] ACTION intent declared but no tool calls — "
                     "hallucination detected, forcing retry"
