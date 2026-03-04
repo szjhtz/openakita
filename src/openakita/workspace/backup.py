@@ -89,7 +89,7 @@ _ALWAYS_EXCLUDE_DIRS = {
     "data/tool_overflow",
     "data/selfcheck",
     "data/openakita_docs",
-    "identity/compiled",
+    "identity/runtime",
     "node_modules",
     "Lib",
     "__pycache__",

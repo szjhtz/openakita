@@ -1616,26 +1616,25 @@ fn ensure_workspace_scaffold(dir: &Path) -> Result<(), String> {
         }
     }
 
-    // compiled 黄金文件：预编译的身份摘要，避免首次启动时必须等 LLM 编译
+    // runtime 黄金文件：手写的行为规范精简版，避免首次启动时等 LLM 编译
+    // SOUL.md 已改为全文注入，不再需要 soul.summary.md
     {
-        let compiled_dir = dir.join("identity").join("compiled");
-        fs::create_dir_all(&compiled_dir)
-            .map_err(|e| format!("create identity/compiled dir failed: {e}"))?;
+        let runtime_dir = dir.join("identity").join("runtime");
+        fs::create_dir_all(&runtime_dir)
+            .map_err(|e| format!("create identity/runtime dir failed: {e}"))?;
 
-        const SOUL_SUMMARY: &str = include_str!("../../../../identity/compiled/soul.summary.md");
-        const AGENT_CORE: &str = include_str!("../../../../identity/compiled/agent.core.md");
-        const AGENT_TOOLING: &str = include_str!("../../../../identity/compiled/agent.tooling.md");
+        const AGENT_CORE: &str = include_str!("../../../../identity/runtime/agent.core.md");
+        const AGENT_TOOLING: &str = include_str!("../../../../identity/runtime/agent.tooling.md");
 
         let golden_files: &[(&str, &str)] = &[
-            ("soul.summary.md", SOUL_SUMMARY),
             ("agent.core.md", AGENT_CORE),
             ("agent.tooling.md", AGENT_TOOLING),
         ];
         for (filename, content) in golden_files {
-            let path = compiled_dir.join(filename);
+            let path = runtime_dir.join(filename);
             if !path.exists() {
                 fs::write(&path, content)
-                    .map_err(|e| format!("write identity/compiled/{filename} failed: {e}"))?;
+                    .map_err(|e| format!("write identity/runtime/{filename} failed: {e}"))?;
             }
         }
     }
@@ -2023,21 +2022,21 @@ fn main() {
             //   - RunningOk   → 后端在运行且版本可接受
             //   - Upgraded    → 旧版后端已被终止，需要启动新版
             let app_version = app.package_info().version.to_string();
-            let state = read_state_file();
-            if let Some(ref ws_id) = state.current_workspace_id {
-                let port = read_workspace_api_port(ws_id).unwrap_or(18900);
+                let state = read_state_file();
+                if let Some(ref ws_id) = state.current_workspace_id {
+                    let port = read_workspace_api_port(ws_id).unwrap_or(18900);
                 let need_start = !matches!(
                     startup_version_check(&app_version, port),
                     VersionCheckResult::RunningOk
                 );
                 if need_start {
                     AUTO_START_IN_PROGRESS.store(true, Ordering::SeqCst);
-                    let venv_dir = openakita_root_dir().join("venv").to_string_lossy().to_string();
-                    let ws_clone = ws_id.clone();
-                    std::thread::spawn(move || {
-                        let _ = openakita_service_start(venv_dir, ws_clone);
+                        let venv_dir = openakita_root_dir().join("venv").to_string_lossy().to_string();
+                        let ws_clone = ws_id.clone();
+                        std::thread::spawn(move || {
+                            let _ = openakita_service_start(venv_dir, ws_clone);
                         AUTO_START_IN_PROGRESS.store(false, Ordering::SeqCst);
-                    });
+                        });
                 }
             }
             Ok(())
@@ -3238,7 +3237,7 @@ fn export_workspace_backup_native(
     let exclude_dirs = ["logs", "data/llm_debug", "data/delegation_logs",
                         "data/traces", "data/react_traces", "data/temp",
                         "data/tool_overflow", "data/selfcheck", "data/openakita_docs",
-                        "identity/compiled", "node_modules", "Lib", "__pycache__"];
+                        "identity/runtime", "node_modules", "Lib", "__pycache__"];
 
     let mut file_count: u64 = 0;
 
@@ -3662,7 +3661,7 @@ fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
     let bundled_dir = bundled_backend_dir();
     let bundled_exe = if cfg!(windows) {
         bundled_dir.join("openakita-server.exe")
-    } else {
+        } else {
         bundled_dir.join("openakita-server")
     };
     let internal_dir = bundled_dir.join("_internal");
@@ -5125,10 +5124,10 @@ fn windows_add_to_path(bin_dir: &Path) -> Result<(), String> {
     let bin_str = bin_dir.to_string_lossy().to_string();
     let bin_norm = bin_str.trim_end_matches('\\');
 
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+            let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
-        .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
-        .map_err(|e| format!("无法打开用户环境变量注册表: {e}"))?;
+                .open_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
+                .map_err(|e| format!("无法打开用户环境变量注册表: {e}"))?;
 
     let current_path = read_path_value(&key)?;
 
@@ -5189,7 +5188,7 @@ fn windows_remove_from_path(bin_dir: &Path) -> Result<(), String> {
     }
 
     if modified {
-        windows_broadcast_env_change();
+    windows_broadcast_env_change();
     }
     Ok(())
 }
@@ -5209,11 +5208,11 @@ fn windows_is_in_path(bin_dir: &Path) -> bool {
         let hive = RegKey::predef(hive_predef);
         if let Ok(key) = hive.open_subkey_with_flags(subkey_path, KEY_READ) {
             if let Ok(current_path) = read_path_value(&key) {
-                if current_path
-                    .split(';')
+            if current_path
+                .split(';')
                     .any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(bin_norm))
-                {
-                    return true;
+            {
+                return true;
                 }
             }
         }

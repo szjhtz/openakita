@@ -31,31 +31,18 @@ logger = logging.getLogger(__name__)
 # =========================================================================
 
 _COMPILE_PROMPTS: dict[str, dict] = {
-    "soul": {
-        "system": "你是一个文本精简专家。",
-        "user": """将以下 AI 身份文档精简为核心原则摘要。
-
-要求:
-- 保留所有核心价值观和行为原则
-- 保留关键的"做/不做"清单
-- 删除叙事性段落、示例和比喻
-- 删除 HTML 注释和格式噪声
-- 输出纯 Markdown，不超过 {max_tokens} tokens
-- 使用紧凑的列表格式
-
-原文:
-{content}""",
-        "max_tokens": 150,
-    },
+    # SOUL.md 不再编译 — 全文直接注入 system prompt，保留哲学基调
     "agent_core": {
+        "target": "agent_core",
         "system": "你是一个文本精简专家。",
         "user": """将以下 AI 行为规范文档精简为核心执行原则。
 
 要求:
-- 保留 Ralph Wiggum 核心循环逻辑
-- 保留任务执行流程
+- 保留 Ralph Wiggum 核心循环逻辑和三条铁律
+- 保留任务执行流程（理解→检查→获取→执行→验证→更新）
+- 保留主动行为框架（每轮自检、成长循环、自我修复协议）
 - 保留禁止行为清单
-- 删除配置示例、命令列表、架构说明等参考信息
+- 删除配置示例、命令列表、架构说明、代码块等参考信息
 - 输出纯 Markdown，不超过 {max_tokens} tokens
 
 原文:
@@ -63,14 +50,16 @@ _COMPILE_PROMPTS: dict[str, dict] = {
         "max_tokens": 250,
     },
     "agent_tooling": {
+        "target": "agent_tooling",
         "system": "你是一个文本精简专家。",
         "user": """从以下文档中提取工具使用原则。
 
 要求:
-- 保留工具选择优先级
+- 保留工具选择优先级（技能→MCP→Shell→临时脚本→搜索安装→自建技能）
+- 保留能力扩展协议（缺少能力时的搜索/安装/创建流程）
 - 保留禁止的敷衍响应模式
-- 保留渐进式披露机制说明
 - 删除具体工具列表（运行时通过 tools 参数注入）
+- 删除代码块和命令示例
 - 输出纯 Markdown，不超过 {max_tokens} tokens
 
 原文:
@@ -78,6 +67,7 @@ _COMPILE_PROMPTS: dict[str, dict] = {
         "max_tokens": 200,
     },
     "user": {
+        "target": "user",
         "system": "你是一个文本精简专家。",
         "user": """从以下用户档案中提取已知信息。
 
@@ -92,6 +82,7 @@ _COMPILE_PROMPTS: dict[str, dict] = {
         "max_tokens": 120,
     },
     "persona_custom": {
+        "target": "persona_custom",
         "system": "你是一个文本精简专家。",
         "user": """从以下用户自定义人格偏好中提取已归集的信息。
 
@@ -108,7 +99,7 @@ _COMPILE_PROMPTS: dict[str, dict] = {
 }
 
 _SOURCE_MAP: dict[str, str] = {
-    "soul": "SOUL.md",
+    # SOUL.md 不再编译 — 全文注入
     "agent_core": "AGENT.md",
     "agent_tooling": "AGENT.md",
     "user": "USER.md",
@@ -116,7 +107,7 @@ _SOURCE_MAP: dict[str, str] = {
 }
 
 _OUTPUT_MAP: dict[str, str] = {
-    "soul": "soul.summary.md",
+    # soul.summary.md 不再生成 — SOUL.md 全文注入
     "agent_core": "agent.core.md",
     "agent_tooling": "agent.tooling.md",
     "user": "user.summary.md",
@@ -137,8 +128,8 @@ class PromptCompiler:
 
     async def compile_all(self, identity_dir: Path) -> dict[str, Path]:
         """编译所有 identity 文件, 使用 LLM 辅助 + 缓存"""
-        compiled_dir = identity_dir / "compiled"
-        compiled_dir.mkdir(exist_ok=True)
+        runtime_dir = identity_dir / "runtime"
+        runtime_dir.mkdir(exist_ok=True)
         results: dict[str, Path] = {}
 
         for target, config in _COMPILE_PROMPTS.items():
@@ -147,7 +138,7 @@ class PromptCompiler:
                 logger.debug(f"[Compiler] Source not found: {source_path}")
                 continue
 
-            output_path = compiled_dir / _OUTPUT_MAP[target]
+            output_path = runtime_dir / _OUTPUT_MAP[target]
 
             if _is_up_to_date(source_path, output_path):
                 results[target] = output_path
@@ -161,7 +152,7 @@ class PromptCompiler:
                 results[target] = output_path
                 logger.info(f"[Compiler] LLM compiled {_SOURCE_MAP[target]} -> {_OUTPUT_MAP[target]}")
 
-        (compiled_dir / ".compiled_at").write_text(
+        (runtime_dir / ".compiled_at").write_text(
             datetime.now().isoformat(), encoding="utf-8"
         )
         return results
@@ -201,8 +192,8 @@ def compile_all(identity_dir: Path, use_llm: bool = False) -> dict[str, Path]:
 
     如果需要 LLM 辅助, 使用 PromptCompiler.compile_all() 异步版本。
     """
-    compiled_dir = identity_dir / "compiled"
-    compiled_dir.mkdir(exist_ok=True)
+    runtime_dir = identity_dir / "runtime"
+    runtime_dir.mkdir(exist_ok=True)
     results: dict[str, Path] = {}
 
     for target in _COMPILE_PROMPTS:
@@ -210,7 +201,7 @@ def compile_all(identity_dir: Path, use_llm: bool = False) -> dict[str, Path]:
         if not source_path.exists():
             continue
 
-        output_path = compiled_dir / _OUTPUT_MAP[target]
+        output_path = runtime_dir / _OUTPUT_MAP[target]
 
         if _is_up_to_date(source_path, output_path):
             results[target] = output_path
@@ -225,7 +216,7 @@ def compile_all(identity_dir: Path, use_llm: bool = False) -> dict[str, Path]:
             results[target] = output_path
             logger.info(f"[Compiler] Rule compiled {_SOURCE_MAP[target]} -> {_OUTPUT_MAP[target]}")
 
-    (compiled_dir / ".compiled_at").write_text(
+    (runtime_dir / ".compiled_at").write_text(
         datetime.now().isoformat(), encoding="utf-8"
     )
     return results
@@ -235,34 +226,89 @@ def compile_all(identity_dir: Path, use_llm: bool = False) -> dict[str, Path]:
 # Rule-based Compilation (fallback)
 # =========================================================================
 
+_RELEVANCE_KEYWORDS: dict[str, list[str]] = {
+    "agent_core": [
+        "ralph", "wiggum", "铁律", "永不放弃", "任务执行", "执行流程",
+        "self-check", "prohibited", "禁止", "proactive", "主动",
+        "self-healing", "自修复", "成长循环", "growth", "每轮自检",
+    ],
+    "agent_tooling": [
+        "工具", "tool", "技能", "skill", "mcp", "脚本", "script",
+        "优先级", "priority", "临时脚本", "能力扩展", "capability",
+        "敷衍", "没有工具",
+    ],
+    "user": ["基本", "技术", "偏好", "profile", "习惯", "工作"],
+    "persona_custom": ["性格", "风格", "沟通", "偏好", "特质"],
+}
+
+# Sections to explicitly exclude per target (avoid cross-contamination)
+_EXCLUDE_SECTIONS: dict[str, list[str]] = {
+    "agent_core": [
+        "tool priority", "工具选择", "工具使用", "临时脚本", "没有工具",
+        "environment", "环境", "build", "running", "multi-agent",
+        "orchestration", "codebase", "code style", "skill definition",
+        "operational notes", "learned patterns", "common issues",
+    ],
+    "agent_tooling": [
+        "ralph", "wiggum", "铁律", "永不放弃", "backpressure",
+        "self-check", "environment", "环境", "build", "running",
+        "multi-agent", "orchestration", "codebase", "code style",
+        "skill definition", "operational notes", "validation",
+    ],
+}
+
 
 def _compile_with_rules(content: str, config: dict) -> str:
-    """Rule-based compilation with HTML cleanup."""
+    """Rule-based compilation with HTML cleanup and code block skipping.
+
+    Falls back to static templates if extraction produces poor results.
+    """
+    target = config.get("target", "")
+
+    # Try static fallback first — guaranteed quality
+    if target in _STATIC_FALLBACKS:
+        return _STATIC_FALLBACKS[target]
+
+    # Otherwise do rule-based extraction
     content = _clean_html(content)
     lines = content.split("\n")
 
     extracted: list[str] = []
     current_section = ""
     in_relevant = False
+    in_code_block = False
 
     for line in lines:
         stripped = line.strip()
+
+        # Skip code blocks entirely
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+
         if not stripped:
             continue
 
         if stripped.startswith("##"):
             current_section = stripped.lower()
-            in_relevant = _is_relevant_section(current_section, config)
+            in_relevant = _is_relevant_section(current_section, target)
             continue
 
         if stripped.startswith("#"):
             continue
 
-        if stripped.startswith(("-", "*")) or re.match(r"^\d+\.", stripped):
-            if len(stripped) < 150:
-                extracted.append(stripped)
-        elif in_relevant and stripped and len(stripped) < 100 or not extracted and stripped and len(stripped) < 200:
-            extracted.append(f"- {stripped}")
+        # Skip table rows and separator lines
+        if stripped.startswith("|") or stripped.startswith("---"):
+            continue
+
+        if in_relevant:
+            if stripped.startswith(("-", "*")) or re.match(r"^\d+\.", stripped):
+                if len(stripped) < 150:
+                    extracted.append(stripped)
+            elif len(stripped) < 100:
+                extracted.append(f"- {stripped}")
 
     unique = list(dict.fromkeys(extracted))
     max_items = max(config.get("max_tokens", 150) // 10, 3)
@@ -277,17 +323,100 @@ def _clean_html(content: str) -> str:
     return content
 
 
-def _is_relevant_section(section: str, config: dict) -> bool:
-    """Check if a section heading is relevant for this compilation target."""
-    relevance_keywords = {
-        150: ["原则", "核心", "principle", "core", "诚实", "校准", "价值"],
-        250: ["ralph", "wigum", "核心", "core", "循环", "任务", "执行"],
-        200: ["工具", "tool", "技能", "skill", "mcp", "敷衍"],
-        120: ["基本", "技术", "偏好", "profile"],
-    }
-    max_tokens = config.get("max_tokens", 150)
-    keywords = relevance_keywords.get(max_tokens, [])
+def _is_relevant_section(section: str, target: str) -> bool:
+    """Check if a section heading is relevant for a specific compilation target."""
+    # Check exclusions first
+    excludes = _EXCLUDE_SECTIONS.get(target, [])
+    if any(ex in section for ex in excludes):
+        return False
+
+    keywords = _RELEVANCE_KEYWORDS.get(target, [])
     return any(kw in section for kw in keywords)
+
+
+# =========================================================================
+# Static Fallback Templates (hand-crafted, high quality)
+# =========================================================================
+
+_STATIC_FALLBACKS: dict[str, str] = {
+    # SOUL.md 不再需要 fallback — 全文直接注入
+
+    "agent_core": """\
+## 核心执行原则
+
+我是 **OpenAkita**，全能自进化AI助手。核心哲学定义在 SOUL.md 中。
+
+### Ralph Wiggum 模式（永不放弃）
+- 任务未完成 → 分析问题 → 尝试解决 → 验证结果 → 重复直到完成
+- 任务未完成，绝不退出
+- 遇到错误，分析并重试
+- 缺少能力，自动获取（搜索/安装/创建 skill）
+
+### 三条铁律
+1. **分清场景，对症下药** — 任务请求必须通过工具完成，闲聊用自然语言
+2. **问题自己解决** — 报错自己分析修复，缺信息主动去查，能力不足立即补充
+3. **永不放弃** — 失败换方法，状态持久化，每次迭代 fresh context
+
+### 任务执行流程
+1. **理解** — 理解用户意图，分解为子任务
+2. **检查** — 检查所需技能是否已有
+3. **获取** — 如缺少技能，从 GitHub 搜索或自己编写
+4. **执行** — 执行任务（Ralph 循环模式）
+5. **验证** — 运行测试和验证
+6. **更新** — 更新 MEMORY.md 记录进度和经验
+
+### 每轮自检
+1. 用户真正想要什么？（表面请求 vs 深层需求）
+2. 有没有用户可能没想到的问题/机会？
+3. 这个任务有没有更好的方式？
+4. 之前有没有处理过类似的事？
+
+### 成长循环
+- 好奇心循环：关注细节了解用户，记录到记忆
+- 模式识别：同一操作第 3 次出现 → 主动提议自动化
+- 经验沉淀：失败教训/高效方法/用户纠正 → 立即记录
+
+### 自我修复协议
+- 诊断：分析错误信息，定位问题类型
+- 自修复：配置→修正，依赖→安装，权限→调整，服务→重启
+- 验证：修复后重新执行原任务
+- 记录：将问题和解决方案记入记忆
+
+### 禁止行为
+- 删除用户数据（除非明确要求）
+- 访问敏感系统路径
+- 放弃任务（除非用户明确取消）
+- 对用户撒谎或隐瞒重要信息""",
+
+    "agent_tooling": """\
+## 工具使用原则
+
+### 核心原则：任务必须通过工具或脚本完成
+不使用工具/脚本 = 没有真正执行任务
+
+### 工具选择顺序
+1. **已安装的本地技能** — skills/ 目录下的技能
+2. **MCP 服务器工具** — 通过 MCP 协议调用的外部工具
+3. **Shell 命令** — 系统命令和脚本
+4. **临时脚本** — write_file 写脚本 + run_shell 执行
+5. **网络搜索 + 安装** — 搜索 GitHub 找到并安装新能力
+6. **自己编写技能** — 用 skill-creator 创建永久技能
+
+### 能力扩展协议（缺少能力时）
+1. **搜索** — 先查已安装 skills，再搜索网络
+2. **安装** — 找到合适的 skill → 直接安装并加载
+3. **创建** — 没有现成的 → 用 skill-creator 创建
+4. **记录** — 新能力获取后，更新经验记忆
+缺少能力 = 需要获取能力 = 获取能力 = 继续任务。中间没有"报告给用户"这一步。
+
+### 禁止的敷衍行为
+- ❌ "这个功能我暂时没有"
+- ❌ "你需要自己去..."
+- ❌ "我建议你手动..."
+- ❌ 只回复文字而不调用任何工具
+- ✅ "让我来处理" → 立即调用工具执行
+- ✅ "这个功能我还没有，让我创建一个" → skill-creator 或临时脚本""",
+}
 
 
 # =========================================================================
@@ -305,8 +434,8 @@ def _is_up_to_date(source: Path, output: Path) -> bool:
 
 
 def check_compiled_outdated(identity_dir: Path, max_age_hours: int = 24) -> bool:
-    compiled_dir = identity_dir / "compiled"
-    timestamp_file = compiled_dir / ".compiled_at"
+    runtime_dir = identity_dir / "runtime"
+    timestamp_file = runtime_dir / ".compiled_at"
     if not timestamp_file.exists():
         return True
     try:
@@ -320,10 +449,10 @@ def check_compiled_outdated(identity_dir: Path, max_age_hours: int = 24) -> bool
 
 
 def get_compiled_content(identity_dir: Path) -> dict[str, str]:
-    compiled_dir = identity_dir / "compiled"
+    runtime_dir = identity_dir / "runtime"
     results: dict[str, str] = {}
     for key, filename in _OUTPUT_MAP.items():
-        filepath = compiled_dir / filename
+        filepath = runtime_dir / filename
         if filepath.exists():
             results[key] = filepath.read_text(encoding="utf-8")
         else:
@@ -333,7 +462,10 @@ def get_compiled_content(identity_dir: Path) -> dict[str, str]:
 
 # Legacy function names (backward compat)
 def compile_soul(content: str) -> str:
-    return _compile_with_rules(content, _COMPILE_PROMPTS["soul"])
+    """Deprecated: SOUL.md is now injected as full text, no compilation needed."""
+    import re
+    content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    return content.strip()
 
 def compile_agent_core(content: str) -> str:
     return _compile_with_rules(content, _COMPILE_PROMPTS["agent_core"])

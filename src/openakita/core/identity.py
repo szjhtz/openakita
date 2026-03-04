@@ -63,6 +63,15 @@ class Identity:
         self._memory = self._load_file(self.memory_path, "MEMORY.md")
         logger.info("Identity loaded: SOUL.md, AGENT.md, USER.md, MEMORY.md")
 
+    def reload(self) -> None:
+        """热重载所有核心文档，清除缓存后重新读取磁盘文件"""
+        self._soul = None
+        self._agent = None
+        self._user = None
+        self._memory = None
+        self.load()
+        logger.info("Identity hot-reloaded from disk")
+
     def _load_file(self, path: Path, name: str) -> str:
         """加载单个文件，如果不存在则尝试从模板创建"""
         try:
@@ -345,10 +354,10 @@ class Identity:
 
     def ensure_compiled(self) -> bool:
         """
-        确保编译产物存在且不过期
+        确保 runtime 产物存在且不过期
 
         Returns:
-            True 如果编译产物可用
+            True 如果 runtime 产物可用
         """
         from ..prompt.compiler import check_compiled_outdated, compile_all
 

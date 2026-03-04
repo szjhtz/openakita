@@ -5,11 +5,11 @@ import {
   IconChevronDown, IconChevronRight, IconGlobe,
   IconZap, IconPlug, IconCalendar,
   IconBug, IconBrain, IconGitHub, IconGitee, IconUsers, IconBot,
-  IconGear, IconBook, IconStorefront, IconPuzzle,
+  IconGear, IconBook, IconStorefront, IconPuzzle, IconFingerprint,
 } from "../icons";
 import logoUrl from "../assets/logo.png";
 
-type ViewId = "wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "dashboard" | "agent_manager" | "agent_store" | "skill_store";
+type ViewId = "wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "identity" | "dashboard" | "agent_manager" | "agent_store" | "skill_store";
 
 export type SidebarProps = {
   collapsed: boolean;
@@ -98,6 +98,9 @@ export function Sidebar({
         </div>
         <div className={`navItem ${view === "memory" ? "navItemActive" : ""}`} onClick={() => onViewChange("memory")} role="button" tabIndex={0} title={t("sidebar.memory")} style={disabledViews.includes("memory") ? { opacity: 0.4 } : undefined}>
           <IconBrain size={16} /> {!collapsed && <span>{t("sidebar.memory")} <sup style={{ fontSize: 9, color: "var(--primary, #3b82f6)", fontWeight: 600 }}>Beta</sup></span>}
+        </div>
+        <div className={`navItem ${view === "identity" ? "navItemActive" : ""}`} onClick={() => onViewChange("identity")} role="button" tabIndex={0} title={t("sidebar.identity")}>
+          <IconFingerprint size={16} /> {!collapsed && <span>{t("sidebar.identity")}</span>}
         </div>
         <div className={`navItem ${view === "status" ? "navItemActive" : ""}`} onClick={async () => { onViewChange("status"); try { await onRefreshStatus(); } catch { /* ignore */ } }} role="button" tabIndex={0} title={t("sidebar.status")}>
           <IconStatus size={16} /> {!collapsed && <span>{t("sidebar.status")}</span>}

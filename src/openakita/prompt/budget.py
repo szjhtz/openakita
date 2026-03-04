@@ -3,17 +3,17 @@ Prompt Budget - Token 预算裁剪模块
 
 控制各部分的 token 预算，确保系统提示词不超出限制。
 
-预算分配（基于运行时实测数据）:
-- identity_budget: 1600 tokens (soul + agent.core + agent.tooling + policies)
-  - policies 独占 50%（实测 627 tokens），其余三部分各 ~17%
+预算分配:
+- identity_budget: 6000 tokens (SOUL 全文 + agent.core + agent.tooling + policies)
+  - SOUL.md 全文注入（~3600, 60%）：保留哲学基调和情感共鸣
+  - agent.core（~720, 12%）：手写的核心执行原则精简版
+  - agent.tooling（~480, 8%）：手写的工具使用原则精简版
+  - policies（~1200, 20%）：系统策略 + 用户策略
 - catalogs_budget: 12000 tokens (tools 33% + skills 55% + mcp 10%)
-  - tools: ~4000 tokens（含 Desktop Tools，排除高频工具）
-  - skills: ~6600 tokens（index 全量 + detail 全量，60+ skills）
-  - mcp: ~1200 tokens
 - user_budget: 300 tokens (user.summary + runtime_facts)
-- memory_budget: 1500 tokens (retriever 输出)
+- memory_budget: 2500 tokens (retriever 输出)
 
-总预算约 ~15000 tokens，占 128k 上下文约 11.7%。
+总预算约 ~20800 tokens，占 128k 上下文约 16.3%。
 """
 
 import logging
@@ -30,13 +30,13 @@ class BudgetConfig:
     """Token 预算配置"""
 
     # 各部分预算（tokens）
-    identity_budget: int = 1600   # soul + agent.core + agent.tooling + policies(627)
+    identity_budget: int = 6000   # SOUL全文 + agent.core + agent.tooling + policies
     catalogs_budget: int = 12000  # tools(33%) + skills(55%) + mcp(10%) 全量注入
     user_budget: int = 300        # user.summary + runtime_facts
     memory_budget: int = 2500     # retriever 输出（含 MEMORY.md + pinned rules + vector memory）
 
     # 总预算（作为硬限制）
-    total_budget: int = 17000
+    total_budget: int = 21000
 
     # 裁剪优先级（数字越小越先被裁剪）
     # 高优先级的内容会在预算不足时保留
@@ -246,10 +246,10 @@ def apply_budget_to_sections(
 
     # 按区域分配预算
     budget_map = {
-        "soul": config.identity_budget // 6,
-        "agent_core": config.identity_budget // 6,
-        "agent_tooling": config.identity_budget // 6,
-        "policies": config.identity_budget // 2,         # policies 占 50%（实测最大）
+        "soul": config.identity_budget * 60 // 100,
+        "agent_core": config.identity_budget * 12 // 100,
+        "agent_tooling": config.identity_budget * 8 // 100,
+        "policies": config.identity_budget * 20 // 100,
         "tools": config.catalogs_budget // 3,            # 33%
         "skills": config.catalogs_budget * 55 // 100,    # 55%
         "mcp": config.catalogs_budget // 10,             # 10%

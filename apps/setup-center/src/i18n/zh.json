@@ -10,6 +10,7 @@
     "mcp": "MCP",
     "scheduler": "计划任务",
     "memory": "记忆管理",
+    "identity": "身份配置",
     "status": "状态面板",
     "dashboard": "协作动态",
     "agentManager": "Agent 管理",
@@ -1265,5 +1266,55 @@
   "web": {
     "passwordBanner": "当前 Web 访问密码为系统自动生成，建议前往设置页面配置自定义密码以保障远程访问安全。",
     "passwordBannerAction": "去设置"
+  },
+  "identity": {
+    "title": "身份配置",
+    "desc": "管理 Agent 的核心身份文件",
+    "save": "保存",
+    "compile": "LM 优化",
+    "compileRules": "规则编译",
+    "reload": "重载",
+    "saved": "已保存并重载",
+    "compiled": "LM 优化完成",
+    "backup": "备份当前配置",
+    "backupDone": "已备份到 {{path}}",
+    "sourceFiles": "源文件",
+    "runtimeFiles": "编译产物 (runtime)",
+    "noFileSelected": "请从左侧选择一个文件进行编辑",
+    "fullTextInject": "全文注入，修改即生效",
+    "needsCompile": "修改后需编译生效",
+
+    "pageBanner": "身份文件是 Agent 的核心人格和行为基础。不当修改可能导致 Agent 行为异常、丧失关键能力或产生不可预期的回复。如果你不确定某项修改的影响，建议先备份原文件。",
+
+    "soulWarning": "SOUL 定义了 Agent 的核心价值观和人格基础，全文直接注入系统提示词，修改立即生效。删除关键原则可能导致 Agent 丧失诚实校准、安全边界等核心行为约束。",
+    "agentWarning": "AGENT 定义了任务执行流程、工具使用规范和禁止行为。不当修改可能导致 Agent 无法正确执行任务、陷入死循环或绕过安全限制。修改后需点击「LM 优化」编译才能生效。",
+    "memoryWarning": "此文件由系统每日自动刷新。手动修改的内容可能在下次自动刷新时被完全覆盖。如需持久化规则，建议使用记忆系统的 add_memory 功能（type=rule）。",
+    "userWarning": "此文件由系统自动学习更新。lifecycle 刷新时会整体覆盖此文件。删除 **字段名**: 值 格式的行将导致该字段的自动学习失效。",
+    "policiesYamlWarning": "此文件控制工具权限和安全策略。错误的配置可能导致 Agent 无法使用关键工具、危险操作失去确认保护、路径/命令黑名单失效。请确保理解每个字段的含义后再修改。",
+    "policiesMdWarning": "与系统内置策略合并时，同名「## 标题」段落会以系统版本为准（您的修改会被忽略）。仅非系统段落的修改会生效。",
+    "runtimeWarning": "此文件为编译产物，是 Agent 实际加载的精简版。手动修改可精细调优 Agent 行为，但重新编译时会被覆盖。",
+
+    "confirmTitle": "确认修改身份文件",
+    "confirmSave": "我已了解风险，确认保存",
+    "confirmCancel": "取消",
+    "confirmRiskSoulAgent": "此修改将直接影响 Agent 与所有用户的每一次对话。",
+    "confirmChangesSummary": "本次修改：{{added}} 行新增，{{removed}} 行删除",
+
+    "compiling": "正在进行 LM 优化编译...",
+    "compilingRules": "正在进行规则编译...",
+    "tokenCount": "~{{count}} / {{budget}} tokens",
+    "tokenOverBudget": "超出 token 预算，注入系统提示词时将被截断",
+    "compiledOverwriteWarning": "重新编译将覆盖您对编译产物的手动修改，确认继续？",
+    "sourceLink": "源文件",
+    "compiledLink": "编译产物",
+    "charCount": "{{count}} / {{max}} 字符",
+    "charCountExceeded": "超出字符限制，保存后将被自动截断",
+    "yamlSyntaxError": "YAML 语法错误",
+    "validationErrors": "格式校验失败，请修正后重试",
+    "validationWarnings": "发现以下问题，确认继续保存？",
+    "loadError": "加载文件失败",
+    "saveError": "保存文件失败",
+    "reloadSuccess": "Identity 已重新加载",
+    "reloadError": "重载失败"
   }
 }

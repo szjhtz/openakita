@@ -100,9 +100,9 @@ identity/USER.md
 identity/MEMORY.md
 identity/MEMORY.md.bak
 identity/personas/user_custom.md
-identity/compiled/.compiled_at
-identity/compiled/user.summary.md
-identity/compiled/persona.custom.md
+identity/runtime/.compiled_at
+identity/runtime/user.summary.md
+identity/runtime/persona.custom.md
 
 # External/downloaded skills (keep structure)
 skills/*

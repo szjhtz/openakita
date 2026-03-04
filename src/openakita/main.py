@@ -1286,10 +1286,9 @@ def compile(
     """
     编译 identity 文件
 
-    将 SOUL.md, AGENT.md, USER.md 编译为精简摘要，
-    降低约 55% 的 token 消耗。
+    将 AGENT.md, USER.md 编译为精简摘要（SOUL.md 已改为全文注入）。
 
-    编译产物保存在 identity/compiled/ 目录。
+    编译产物保存在 identity/runtime/ 目录。
     """
     from .prompt.compiler import check_compiled_outdated, compile_all
 
@@ -1317,7 +1316,7 @@ def compile(
                 table.add_row(f"{name}.md", path.name, f"{size} 字符")
 
         console.print(table)
-        console.print(f"\n[green]✓[/green] 编译完成，产物保存在 {identity_dir / 'compiled'}")
+        console.print(f"\n[green]✓[/green] 编译完成，产物保存在 {identity_dir / 'runtime'}")
 
     except Exception as e:
         console.print(f"[red]编译失败: {e}[/red]")
@@ -1356,8 +1355,8 @@ def prompt_debug(
                 task_description=task,
             )
 
-            # 编译产物
-            table = Table(title="编译产物 (v2)")
+            # Runtime 产物
+            table = Table(title="Runtime 文件")
             table.add_column("文件", style="cyan")
             table.add_column("Tokens", style="green")
 

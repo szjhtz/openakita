@@ -10,6 +10,7 @@ import { TokenStatsView } from "./views/TokenStatsView";
 import { MCPView } from "./views/MCPView";
 import { SchedulerView } from "./views/SchedulerView";
 import { MemoryView } from "./views/MemoryView";
+import { IdentityView } from "./views/IdentityView";
 import { AgentDashboardView } from "./views/AgentDashboardView";
 import { AgentManagerView } from "./views/AgentManagerView";
 import { FeedbackModal } from "./views/FeedbackModal";
@@ -176,7 +177,7 @@ export function App() {
     [t],
   );
 
-  const [view, setView] = useState<"wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "dashboard" | "agent_manager" | "agent_store" | "skill_store">(IS_WEB ? "chat" : "wizard");
+  const [view, setView] = useState<"wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "identity" | "dashboard" | "agent_manager" | "agent_store" | "skill_store">(IS_WEB ? "chat" : "wizard");
   const [appInitializing, setAppInitializing] = useState(!IS_WEB); // Web 模式无需首次运行检测
   const [configExpanded, setConfigExpanded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -7243,6 +7244,11 @@ export function App() {
             <MemoryView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
           )}
         </div>
+      );
+    }
+    if (view === "identity") {
+      return (
+        <IdentityView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
       );
     }
     if (view === "dashboard") {

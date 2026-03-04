@@ -37,6 +37,7 @@ from .routes import (
     files,
     health,
     hub,
+    identity,
     im,
     logs,
     mcp,
@@ -207,6 +208,7 @@ def create_app(
     app.include_router(workspace_io.router)
     app.include_router(ws_routes.router)
     app.include_router(hub.router)
+    app.include_router(identity.router)
 
     @app.get("/")
     async def root():

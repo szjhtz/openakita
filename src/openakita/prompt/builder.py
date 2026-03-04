@@ -234,36 +234,47 @@ def _build_identity_section(
     tools_enabled: bool,
     budget_tokens: int,
 ) -> str:
-    """构建 Identity 层"""
+    """构建 Identity 层
+
+    SOUL.md 全文注入（只清理 HTML 注释），保留哲学基调和情感共鸣。
+    AGENT 行为规范使用手写的 runtime 精简版（agent.core.md / agent.tooling.md）。
+    """
+    import re
+
     parts = []
 
     # 标题
     parts.append("# OpenAkita System")
     parts.append("")
-    parts.append("你是 OpenAkita，一个全能自进化AI助手。")
-    parts.append("")
 
-    # Soul summary (~17%)
-    if compiled.get("soul"):
-        soul_result = apply_budget(compiled["soul"], budget_tokens // 6, "soul")
+    # SOUL — 全文注入（~60% 预算），保留叙事和价值共鸣
+    soul_path = identity_dir / "SOUL.md"
+    if soul_path.exists():
+        soul_raw = soul_path.read_text(encoding="utf-8")
+        soul_clean = re.sub(r"<!--.*?-->", "", soul_raw, flags=re.DOTALL).strip()
+        soul_result = apply_budget(soul_clean, budget_tokens * 60 // 100, "soul")
         parts.append(soul_result.content)
         parts.append("")
+    elif compiled.get("soul"):
+        # fallback: 如果只有编译版（如旧目录结构），仍然可用
+        parts.append(compiled["soul"])
+        parts.append("")
 
-    # Agent core (~17%)
+    # Agent core (~12%) — 手写的核心执行原则精简版
     if compiled.get("agent_core"):
-        core_result = apply_budget(compiled["agent_core"], budget_tokens // 6, "agent_core")
+        core_result = apply_budget(compiled["agent_core"], budget_tokens * 12 // 100, "agent_core")
         parts.append(core_result.content)
         parts.append("")
 
-    # Agent tooling (~17%, only if tools enabled)
+    # Agent tooling (~8%, only if tools enabled)
     if tools_enabled and compiled.get("agent_tooling"):
         tooling_result = apply_budget(
-            compiled["agent_tooling"], budget_tokens // 6, "agent_tooling"
+            compiled["agent_tooling"], budget_tokens * 8 // 100, "agent_tooling"
         )
         parts.append(tooling_result.content)
         parts.append("")
 
-    # Policies = 系统策略（代码层，不可删除）+ 用户策略（文件层，可定制）
+    # Policies (~20%) = 系统策略（代码层，不可删除）+ 用户策略（文件层，可定制）
     policies_path = identity_dir / "prompts" / "policies.md"
     if policies_path.exists():
         user_policies = policies_path.read_text(encoding="utf-8")
@@ -271,7 +282,7 @@ def _build_identity_section(
         user_policies = _DEFAULT_USER_POLICIES
         logger.warning("policies.md not found, using built-in defaults")
     merged_policies = _merge_policies(_SYSTEM_POLICIES, user_policies)
-    policies_result = apply_budget(merged_policies, budget_tokens // 2, "policies")
+    policies_result = apply_budget(merged_policies, budget_tokens * 20 // 100, "policies")
     parts.append(policies_result.content)
 
     return "\n".join(parts)
