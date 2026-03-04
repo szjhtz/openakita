@@ -3748,3 +3748,46 @@ button:disabled {
 [data-theme="light"] .sacToolBlink {
   background: #2563eb;
 }
+
+/* ──────────────────────────────────────────────────
+   Mobile responsive layout (Web mode)
+   ────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .appShell {
+    grid-template-columns: 1fr !important;
+  }
+
+  .sidebar {
+    position: fixed;
+    z-index: 1000;
+    inset: 0;
+    width: 100% !important;
+    max-width: 280px;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+  }
+  .sidebar.sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .contentMain,
+  .contentChat {
+    width: 100vw !important;
+    padding: 8px !important;
+  }
+
+  .topbar {
+    padding: 6px 10px !important;
+    gap: 6px !important;
+  }
+
+  .chatInput {
+    padding: 8px !important;
+  }
+
+  .chatInputBox textarea {
+    font-size: 16px !important;
+  }
+}

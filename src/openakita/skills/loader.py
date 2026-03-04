@@ -15,6 +15,8 @@ from pathlib import Path
 from .parser import ParsedSkill, SkillMetadata, SkillParser
 from .registry import SkillRegistry
 
+_CURRENT_PLATFORM = sys.platform  # "win32", "darwin", "linux"
+
 logger = logging.getLogger(__name__)
 
 def _resolve_user_workspace_skills() -> Path:
@@ -244,6 +246,16 @@ class SkillLoader:
 
     I18N_FILENAME = ".openakita-i18n.json"
 
+    @staticmethod
+    def _is_os_compatible(supported_os: list[str]) -> bool:
+        """Check if the current platform is in the skill's supported OS list.
+
+        Empty list means all platforms are supported.
+        """
+        if not supported_os:
+            return True
+        return _CURRENT_PLATFORM in supported_os
+
     def load_skill(self, skill_dir: Path) -> ParsedSkill | None:
         """
         加载单个技能
@@ -259,6 +271,15 @@ class SkillLoader:
 
             # 加载 sidecar 翻译文件
             self._load_i18n(skill_dir, skill.metadata)
+
+            # OS compatibility check
+            if not self._is_os_compatible(skill.metadata.supported_os):
+                logger.debug(
+                    f"Skipping skill {skill.metadata.name}: "
+                    f"not compatible with {_CURRENT_PLATFORM} "
+                    f"(requires {skill.metadata.supported_os})"
+                )
+                return None
 
             # 验证
             errors = self.parser.validate(skill)

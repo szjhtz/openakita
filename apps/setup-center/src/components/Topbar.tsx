@@ -28,6 +28,8 @@ export type TopbarProps = {
   onRefreshAll: () => Promise<void>;
   toggleTheme: () => void;
   themePrefState: Theme;
+  isWeb?: boolean;
+  onLogout?: () => void;
 };
 
 export function Topbar({
@@ -39,7 +41,7 @@ export function Topbar({
   onCreateWorkspace,
   serviceRunning, endpointCount, dataMode, busy,
   onDisconnect, onConnect, onStart, onRefreshAll,
-  toggleTheme, themePrefState,
+  toggleTheme, themePrefState, isWeb, onLogout,
 }: TopbarProps) {
   const { t, i18n } = useTranslation();
 
@@ -152,7 +154,18 @@ export function Topbar({
         {dataMode === "remote" && <span className="pill" style={{ fontSize: 10, marginLeft: 4, background: "#e3f2fd", color: "#1565c0" }}>{t("connect.remoteMode")}</span>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {serviceRunning ? (
+        {isWeb ? (
+          onLogout && (
+            <button
+              className="topbarConnectBtn"
+              onClick={onLogout}
+              title={t("topbar.logout")}
+            >
+              <IconX size={13} />
+              <span>{t("topbar.logout")}</span>
+            </button>
+          )
+        ) : serviceRunning ? (
           <button
             className="topbarConnectBtn"
             onClick={onDisconnect}

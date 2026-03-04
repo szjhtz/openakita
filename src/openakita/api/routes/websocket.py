@@ -1,0 +1,125 @@
+"""
+WebSocket hub for real-time event push.
+
+Replaces Tauri `listen()` events for web/mobile clients.
+
+Endpoints:
+  /ws/events?token=<access_token>  — general event stream
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from typing import Any
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from ..auth import WebAccessConfig
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+class ConnectionManager:
+    """Manages active WebSocket connections and broadcasts events."""
+
+    def __init__(self) -> None:
+        self._connections: list[WebSocket] = []
+        self._lock = asyncio.Lock()
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        async with self._lock:
+            self._connections.append(ws)
+        logger.debug("WebSocket client connected (total: %d)", len(self._connections))
+
+    async def disconnect(self, ws: WebSocket) -> None:
+        async with self._lock:
+            self._connections = [c for c in self._connections if c is not ws]
+        logger.debug("WebSocket client disconnected (total: %d)", len(self._connections))
+
+    async def broadcast(self, event: str, data: Any = None) -> None:
+        """Send an event to all connected clients."""
+        if not self._connections:
+            return
+        message = json.dumps({"event": event, "data": data, "ts": time.time()})
+        dead: list[WebSocket] = []
+        async with self._lock:
+            for ws in self._connections:
+                try:
+                    await ws.send_text(message)
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                self._connections = [c for c in self._connections if c is not ws]
+
+    @property
+    def client_count(self) -> int:
+        return len(self._connections)
+
+
+# Global manager instance
+manager = ConnectionManager()
+
+
+def _authenticate_ws(ws: WebSocket, config: WebAccessConfig) -> bool:
+    """Authenticate WebSocket connection via query param or local access."""
+    # Local connections are exempt
+    if ws.client and ws.client.host in ("127.0.0.1", "::1"):
+        import os
+        trust_proxy = os.environ.get("TRUST_PROXY", "").lower() in ("1", "true", "yes")
+        if not trust_proxy:
+            return True
+
+    # Check token from query params
+    token = ws.query_params.get("token", "")
+    if token and config.validate_access_token(token):
+        return True
+
+    return False
+
+
+@router.websocket("/ws/events")
+async def ws_events(ws: WebSocket):
+    config: WebAccessConfig = ws.app.state.web_access_config
+
+    if not _authenticate_ws(ws, config):
+        await ws.close(code=4001, reason="Authentication required")
+        return
+
+    await manager.connect(ws)
+    try:
+        # Send initial connection confirmation
+        await ws.send_text(json.dumps({
+            "event": "connected",
+            "data": {"message": "WebSocket connected"},
+            "ts": time.time(),
+        }))
+
+        # Keep connection alive; listen for client messages (ping/pong, etc.)
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
+                # Handle ping
+                if msg == "ping":
+                    await ws.send_text(json.dumps({"event": "pong", "ts": time.time()}))
+            except asyncio.TimeoutError:
+                # Send server-side ping to keep connection alive
+                try:
+                    await ws.send_text(json.dumps({"event": "ping", "ts": time.time()}))
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug("WebSocket error: %s", e)
+    finally:
+        await manager.disconnect(ws)
+
+
+async def broadcast_event(event: str, data: Any = None) -> None:
+    """Convenience function to broadcast events from anywhere in the codebase."""
+    await manager.broadcast(event, data)

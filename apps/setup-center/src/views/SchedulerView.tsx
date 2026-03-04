@@ -63,7 +63,7 @@ type TaskForm = {
   enabled: boolean;
 };
 
-const API_BASE = "http://127.0.0.1:18900";
+// API_BASE is derived from the apiBaseUrl prop (empty string = relative path for web mode)
 
 const defaultForm: TaskForm = {
   name: "",
@@ -250,7 +250,8 @@ type TaskTab = "active" | "completed" | "all";
 const ACTIVE_STATUSES = new Set(["pending", "scheduled", "running"]);
 const COMPLETED_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
-export function SchedulerView({ serviceRunning }: { serviceRunning: boolean }) {
+export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunning: boolean; apiBaseUrl?: string }) {
+  const API_BASE = apiBaseUrl;
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(false);

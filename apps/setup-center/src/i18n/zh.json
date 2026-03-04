@@ -37,6 +37,7 @@
     "autoStartFail": "自动启动服务失败，请手动启动",
     "startFail": "服务启动失败，请检查配置",
     "disconnect": "断开",
+    "logout": "登出",
     "disconnected": "已断开服务连接",
     "switchWorkspace": "切换工作区",
     "quickCreateWs": "新建工作区",
@@ -1223,6 +1224,37 @@
     "backupNoHistory": "暂无历史备份",
     "backupSaved": "备份设置已保存",
     "backupNoPath": "请先设置备份存储位置",
-    "backupSize": "大小"
+    "backupSize": "大小",
+    "webPasswordTitle": "Web 访问密码",
+    "webPasswordHint": "远程 Web 访问需要此密码。本机访问（127.0.0.1）免密。",
+    "webPasswordCurrent": "当前密码提示",
+    "webPasswordNewPlaceholder": "输入新密码",
+    "webPasswordSet": "设置密码",
+    "webPasswordRandomize": "随机生成",
+    "webPasswordChanged": "Web 访问密码已修改，所有远程会话已失效",
+    "webPasswordReset": "Web 访问密码已重置为：{{password}}"
+  },
+  "poster": {
+    "title": "海报生成",
+    "exportPng": "导出 PNG",
+    "close": "关闭",
+    "inviteTitle": "邀请海报",
+    "inviteSlogan": "分享 Agent，而不仅是技能",
+    "scanToJoin": "扫码加入",
+    "achievementTitle": "成就卡片",
+    "pioneer": "先锋",
+    "publishCount": "发布数",
+    "downloadCount": "下载量",
+    "apBalance": "AP 余额",
+    "exported": "已导出海报",
+    "exportFailed": "导出失败，请重试"
+  },
+  "login": {
+    "prompt": "请输入访问密码以继续",
+    "passwordPlaceholder": "输入密码",
+    "submit": "登录",
+    "loggingIn": "登录中...",
+    "failed": "登录失败",
+    "hint": "密码在服务首次启动时自动生成，可在桌面端设置中查看或重置"
   }
 }

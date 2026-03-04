@@ -1,9 +1,8 @@
 import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getVersion } from "@tauri-apps/api/app";
-import type { Update } from "@tauri-apps/plugin-updater";
+import { invoke, listen, IS_TAURI, IS_WEB, getAppVersion, onWsEvent } from "./platform";
+import { checkAuth, installFetchInterceptor } from "./platform/auth";
+import { LoginView } from "./views/LoginView";
 import { ChatView } from "./views/ChatView";
 import { SkillManager } from "./views/SkillManager";
 import { IMView } from "./views/IMView";
@@ -63,6 +62,7 @@ import { SearchSelect } from "./components/SearchSelect";
 import { ProviderSearchSelect } from "./components/ProviderSearchSelect";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
 import { CliManager } from "./components/CliManager";
+import { WebPasswordManager } from "./components/WebPasswordManager";
 import { FieldText, FieldBool, FieldSelect, FieldCombo, TelegramPairingCodeHint } from "./components/EnvFields";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ToastContainer } from "./components/ToastContainer";
@@ -86,6 +86,19 @@ const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
 export function App() {
   const { t, i18n } = useTranslation();
+
+  // ── Web auth gate ──
+  const [webAuthed, setWebAuthed] = useState(!IS_WEB);
+  const [authChecking, setAuthChecking] = useState(IS_WEB);
+  useEffect(() => {
+    if (!IS_WEB) return;
+    checkAuth().then((ok) => {
+      if (ok) installFetchInterceptor();
+      setWebAuthed(ok);
+      setAuthChecking(false);
+    });
+  }, []);
+
   const [themePrefState, setThemePrefState] = useState<Theme>(getThemePref());
   useEffect(() => {
     const handler = (e: Event) => setThemePrefState((e as CustomEvent<Theme>).detail);
@@ -124,8 +137,9 @@ export function App() {
     doDownloadAndInstall, doRelaunchAfterUpdate,
   } = useVersionCheck();
 
-  // ── 独立初始化 autostart 状态（不依赖 refreshStatus 的复杂前置条件） ──
+  // ── 独立初始化 autostart 状态（不依赖 refreshStatus 的复杂前置条件，Web 跳过） ──
   useEffect(() => {
+    if (IS_WEB) return;
     invoke<boolean>("autostart_is_enabled")
       .then((en) => setAutostartEnabled(en))
       .catch(() => setAutostartEnabled(null));
@@ -153,8 +167,8 @@ export function App() {
     [t],
   );
 
-  const [view, setView] = useState<"wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "dashboard" | "agent_manager">("wizard");
-  const [appInitializing, setAppInitializing] = useState(true); // 首次加载检测中，防止闪烁
+  const [view, setView] = useState<"wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "dashboard" | "agent_manager" | "agent_store" | "skill_store">(IS_WEB ? "chat" : "wizard");
+  const [appInitializing, setAppInitializing] = useState(!IS_WEB); // Web 模式无需首次运行检测
   const [configExpanded, setConfigExpanded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
@@ -162,8 +176,9 @@ export function App() {
   const [multiAgentEnabled, setMultiAgentEnabled] = useState(false);
 
   // ── Data mode: "local" (Tauri commands) or "remote" (HTTP API) ──
-  const [dataMode, setDataMode] = useState<"local" | "remote">("local");
-  const [apiBaseUrl, setApiBaseUrl] = useState(() => localStorage.getItem("openakita_apiBaseUrl") || "http://127.0.0.1:18900");
+  // Web mode always starts in "remote" since the backend is already running
+  const [dataMode, setDataMode] = useState<"local" | "remote">(IS_WEB ? "remote" : "local");
+  const [apiBaseUrl, setApiBaseUrl] = useState(() => IS_WEB ? "" : (localStorage.getItem("openakita_apiBaseUrl") || "http://127.0.0.1:18900"));
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [connectAddress, setConnectAddress] = useState("");
   const [stepId, setStepId] = useState<StepId>("llm");
@@ -243,6 +258,7 @@ export function App() {
 
   /** 连接已检测到的本地服务，跳过 onboarding */
   async function obConnectExistingService() {
+    if (!IS_TAURI) return;
     try {
       // 1. 确保有默认工作区
       const wsList = await invoke<WorkspaceSummary[]>("list_workspaces");
@@ -496,20 +512,42 @@ export function App() {
 
   async function refreshAll() {
     setError(null);
-    const res = await invoke<PlatformInfo>("get_platform_info");
-    setInfo(res);
-    const ws = await invoke<WorkspaceSummary[]>("list_workspaces");
-    setWorkspaces(ws);
-    const cur = await invoke<string | null>("get_current_workspace_id");
-    setCurrentWorkspaceId(cur);
+    if (IS_TAURI) {
+      const res = await invoke<PlatformInfo>("get_platform_info");
+      setInfo(res);
+      const ws = await invoke<WorkspaceSummary[]>("list_workspaces");
+      setWorkspaces(ws);
+      const cur = await invoke<string | null>("get_current_workspace_id");
+      setCurrentWorkspaceId(cur);
+    } else {
+      if (!currentWorkspaceId) setCurrentWorkspaceId("default");
+    }
   }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        // ── Web 模式：简化初始化，后端已在运行 ──
+        if (IS_WEB) {
+          await refreshAll();
+          if (!cancelled) {
+            setApiBaseUrl("");
+            setServiceStatus({ running: true, pid: null, pidFile: "" });
+            try {
+              const hRes = await safeFetch("/api/health", { signal: AbortSignal.timeout(3_000) });
+              const hData = await hRes.json();
+              if (hData.version) setBackendVersion(hData.version);
+            } catch { /* ignore */ }
+            try { await refreshStatus("local", "", true); } catch { /* ignore */ }
+            autoCheckEndpoints("");
+          }
+          return;
+        }
+
+        // ── Tauri 模式：完整初始化流程 ──
         try {
-          const v = await getVersion();
+          const v = await getAppVersion();
           if (!cancelled) {
             setAppVersion(v);
             setSelectedPypiVersion(v);
@@ -518,10 +556,8 @@ export function App() {
           // ignore
         }
         await refreshAll();
-        // ── Auto-detect step completion on startup ──
         if (!cancelled) {
           try {
-            // Check if openakita is installed (file-based fast path, subprocess fallback)
             const plat = await invoke<PlatformInfo>("get_platform_info");
             const vd = joinPath(plat.openakitaRootDir, "venv");
             const v = await invoke<string>("openakita_version", { venvDir: vd });
@@ -534,7 +570,6 @@ export function App() {
           } catch { /* venv not found or openakita not installed */ }
 
           try {
-            // Check if endpoints exist (use readWorkspaceFile which respects dataMode)
             const raw = await readWorkspaceFile("data/llm_endpoints.json");
             const parsed = JSON.parse(raw);
             const eps = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
@@ -552,13 +587,9 @@ export function App() {
             }
           } catch { /* ignore */ }
 
-          // ── Auto-connect to local running service ──
-          // 如果本地有 OpenAkita 服务在运行，自动连接并同步状态。
-          // 版本不一致时仍然连接，由 checkVersionMismatch 负责提示用户。
           if (!cancelled) {
             const localUrl = "http://127.0.0.1:18900";
 
-            /** 连接已运行的服务并同步状态 */
             const connectToRunningService = async (url: string) => {
               const healthRes = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(3000) });
               if (!healthRes.ok) return false;
@@ -579,9 +610,6 @@ export function App() {
               alreadyConnected = await connectToRunningService(localUrl);
             } catch { /* 服务未运行 */ }
 
-            // ── 自动启动等待 ──
-            // Rust 端在 setup() 中检测到服务未运行时会自动拉起后端，
-            // 此处轮询等待直到服务就绪或确认启动失败。
             if (!alreadyConnected && !cancelled) {
               let handled = false;
               try {
@@ -590,25 +618,21 @@ export function App() {
                   handled = true;
                   setBusy(t("topbar.autoStarting"));
                   let serviceReady = false;
-                  let spawnDone = false;       // Rust 线程已完成（进程已 spawn 或失败）
-                  let postSpawnWait = 0;       // spawn 完成后的额外等待次数
+                  let spawnDone = false;
+                  let postSpawnWait = 0;
 
                   for (let attempt = 0; attempt < 90 && !cancelled; attempt++) {
                     await new Promise((r) => setTimeout(r, 2000));
-                    // 尝试连接服务
                     try {
                       serviceReady = await connectToRunningService(localUrl);
                       if (serviceReady) break;
                     } catch { /* still starting */ }
-                    // 检查 Rust 端 spawn 是否完成
                     if (!spawnDone) {
                       try {
                         const still = await invoke<boolean>("is_backend_auto_starting");
                         if (!still) spawnDone = true;
                       } catch { spawnDone = true; }
                     }
-                    // spawn 完成后：进程已启动但 HTTP 可能尚未就绪，
-                    // 额外等待最多 60 秒（30 次 × 2s）让 FastAPI+uvicorn 初始化
                     if (spawnDone) {
                       postSpawnWait++;
                       if (postSpawnWait > 30) break;
@@ -616,7 +640,6 @@ export function App() {
                   }
                   if (!cancelled) {
                     if (serviceReady) {
-                      // 启动刚完成时 HTTP 可能仍有短暂不稳定，给一段宽限期避免闪一次「不可达」
                       visibilityGraceRef.current = true;
                       heartbeatFailCount.current = 0;
                       setTimeout(() => { visibilityGraceRef.current = false; }, 10000);
@@ -625,14 +648,12 @@ export function App() {
                     if (serviceReady) {
                       setNotice(t("topbar.autoStartSuccess"));
                     } else {
-                      // 自动启动失败 → 显式标记服务未运行，让按钮变为可用
                       setServiceStatus({ running: false, pid: null, pidFile: "" });
                       setError(t("topbar.autoStartFail"));
                     }
                   }
                 }
               } catch { /* is_backend_auto_starting 不可用，忽略 */ }
-              // 没有自动启动 → 显式标记服务未运行（解除 serviceStatus===null 的锁定）
               if (!handled && !cancelled) {
                 setServiceStatus({ running: false, pid: null, pidFile: "" });
               }
@@ -682,8 +703,7 @@ export function App() {
           if (heartbeatStateRef.current !== "alive") {
             heartbeatStateRef.current = "alive";
             setHeartbeatState("alive");
-            // 恢复时更新托盘状态
-            try { await invoke("set_tray_backend_status", { status: "alive" }); } catch { /* ignore */ }
+            if (IS_TAURI) try { await invoke("set_tray_backend_status", { status: "alive" }); } catch { /* ignore */ }
           }
           setServiceStatus(prev => prev ? { ...prev, running: true } : { running: true, pid: null, pidFile: "" });
           // 提取后端版本
@@ -707,12 +727,10 @@ export function App() {
           return;
         }
 
-        // ── 二次确认：通过 Tauri 检查进程是否存活 ──
-        if (dataMode !== "remote") {
+        if (IS_TAURI && dataMode !== "remote") {
           try {
             const alive = await invoke<boolean>("openakita_check_pid_alive", { workspaceId: currentWorkspaceId });
             if (alive) {
-              // HTTP 不可达但进程存活 → DEGRADED（黄灯）
               if (heartbeatStateRef.current !== "degraded") {
                 heartbeatStateRef.current = "degraded";
                 setHeartbeatState("degraded");
@@ -728,8 +746,7 @@ export function App() {
         if (heartbeatStateRef.current !== "dead") {
           heartbeatStateRef.current = "dead";
           setHeartbeatState("dead");
-          // 仅在状态实际变化时通知 Rust（避免重复系统通知）
-          try { await invoke("set_tray_backend_status", { status: "dead" }); } catch { /* ignore */ }
+          if (IS_TAURI) try { await invoke("set_tray_backend_status", { status: "dead" }); } catch { /* ignore */ }
         }
         setServiceStatus(prev => prev ? { ...prev, running: false } : { running: false, pid: null, pidFile: "" });
         setBackendVersion(null);
@@ -837,6 +854,34 @@ export function App() {
     };
   }, []);
 
+  // ── Web mode: subscribe to WebSocket events (replaces Tauri listen() for real-time updates) ──
+  useEffect(() => {
+    if (!IS_WEB || !webAuthed) return;
+    const unsub = onWsEvent((event, data) => {
+      const p = data as any;
+      if (!p) return;
+      if (event === "pip_install_event") {
+        if (p.kind === "stage") {
+          setInstallProgress({ stage: String(p.stage || ""), percent: Math.max(0, Math.min(100, Number(p.percent || 0))) });
+        } else if (p.kind === "line") {
+          const text = String(p.text || "");
+          if (text) setInstallLiveLog((prev) => { const n = prev + text; return n.length > 80_000 ? n.slice(n.length - 80_000) : n; });
+        }
+      } else if (event === "module-install-progress") {
+        const msg = String(p.message || "");
+        const status = String(p.status || "");
+        const moduleId = String(p.moduleId || "");
+        if (msg) {
+          const prefix = status === "retrying" ? "🔄" : status === "error" ? "❌" : status === "done" ? "✅" : status === "warning" ? "⚠️" : status === "restart-hint" ? "🔁" : "📦";
+          setObDetailLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${prefix} [${moduleId}] ${msg}`]);
+        }
+      } else if (event === "service_status_changed") {
+        refreshStatus().catch(() => {});
+      }
+    });
+    return unsub;
+  }, [webAuthed]);
+
   const canUsePython = useMemo(() => {
     if (selectedPythonIdx < 0) return false;
     return pythonCandidates[selectedPythonIdx]?.isUsable ?? false;
@@ -868,22 +913,19 @@ export function App() {
     let parsed: EnvMap = {};
 
     if (shouldUseHttpApi()) {
-      // ── 后端运行中 → HTTP API（读取后端实时 env）──
       try {
         const res = await safeFetch(`${httpApiBase()}/api/config/env`);
         const data = await res.json();
         parsed = data.env || {};
       } catch {
-        // HTTP 暂时不可用（后端刚启动未就绪等），回退到本地读取
-        if (workspaceId) {
+        if (IS_TAURI && workspaceId) {
           try {
             const content = await invoke<string>("workspace_read_file", { workspaceId, relativePath: ".env" });
             parsed = parseEnv(content);
           } catch { parsed = {}; }
         }
       }
-    } else if (workspaceId) {
-      // ── 后端未运行 → Tauri 本地读取 .env ──
+    } else if (IS_TAURI && workspaceId) {
       try {
         const content = await invoke<string>("workspace_read_file", { workspaceId, relativePath: ".env" });
         parsed = parseEnv(content);
@@ -907,15 +949,20 @@ export function App() {
     setBusy("创建工作区...");
     setError(null);
     try {
-      const ws = await invoke<WorkspaceSummary>("create_workspace", {
-        id: newWsId,
-        name: newWsName.trim(),
-        setCurrent: true,
-      });
-      await refreshAll();
-      setCurrentWorkspaceId(ws.id);
+      if (IS_WEB) {
+        setError("工作区管理暂不支持 Web 模式，请在桌面端操作");
+        return;
+      } else {
+        const ws = await invoke<WorkspaceSummary>("create_workspace", {
+          id: newWsId,
+          name: newWsName.trim(),
+          setCurrent: true,
+        });
+        await refreshAll();
+        setCurrentWorkspaceId(ws.id);
+      }
       envLoadedForWs.current = null;
-      setNotice(`已创建工作区：${ws.name}（${ws.id}）`);
+      setNotice(`已创建工作区：${newWsName.trim()}（${newWsId}）`);
     } finally {
       setBusy(null);
     }
@@ -926,7 +973,12 @@ export function App() {
     setError(null);
     try {
       const wasRunning = serviceStatus?.running;
-      await invoke("set_current_workspace", { id });
+      if (IS_WEB) {
+        setError("工作区切换暂不支持 Web 模式，请在桌面端操作");
+        return;
+      } else {
+        await invoke("set_current_workspace", { id });
+      }
       await refreshAll();
       envLoadedForWs.current = null;
       if (wasRunning) {
@@ -1000,7 +1052,7 @@ export function App() {
   }
 
   async function persistPythonEnvConfig(venvPath: string) {
-    if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId || !IS_TAURI) return;
     try {
       const entries: { key: string; value: string }[] = [
         { key: "PYTHON_VENV_PATH", value: venvPath },
@@ -1714,8 +1766,8 @@ export function App() {
         console.warn(`readWorkspaceFile: HTTP failed for ${relativePath}, falling back to Tauri`);
       }
     }
-    // ── 后端未运行 / HTTP 回退 → Tauri 本地读取 ──
-    if (currentWorkspaceId) {
+    // ── 后端未运行 / HTTP 回退 → Tauri 本地读取（Web 模式无此能力） ──
+    if (IS_TAURI && currentWorkspaceId) {
       return invoke<string>("workspace_read_file", { workspaceId: currentWorkspaceId, relativePath });
     }
     throw new Error(`读取配置失败：服务未运行且无本地工作区 (${relativePath})`);
@@ -1755,8 +1807,8 @@ export function App() {
         console.warn(`writeWorkspaceFile: HTTP failed for ${relativePath}, falling back to Tauri`);
       }
     }
-    // ── 后端未运行 / HTTP 回退 → Tauri 本地写入 ──
-    if (currentWorkspaceId) {
+    // ── 后端未运行 / HTTP 回退 → Tauri 本地写入（Web 模式无此能力） ──
+    if (IS_TAURI && currentWorkspaceId) {
       await invoke("workspace_write_file", { workspaceId: currentWorkspaceId, relativePath, content });
       return;
     }
@@ -1788,7 +1840,7 @@ export function App() {
       await saveEnvKeys(keys);
 
       // Step 1.5: 自动安装已启用 IM 通道缺失的依赖（非阻塞，失败不影响重启）
-      if (venvDir && currentWorkspaceId) {
+      if (IS_TAURI && venvDir && currentWorkspaceId) {
         try {
           await invoke("openakita_ensure_channel_deps", {
             venvDir,
@@ -1987,14 +2039,14 @@ export function App() {
             body: JSON.stringify(compilerEnvPayload),
           });
         } catch {
-          if (currentWorkspaceId) {
+          if (IS_TAURI && currentWorkspaceId) {
             await invoke("workspace_update_env", {
               workspaceId: currentWorkspaceId,
               entries: [{ key: effectiveCompApiKeyEnv, value: effectiveCompApiKeyValue }],
             });
           }
         }
-      } else if (currentWorkspaceId) {
+      } else if (IS_TAURI && currentWorkspaceId) {
         await invoke("workspace_update_env", {
           workspaceId: currentWorkspaceId,
           entries: [{ key: effectiveCompApiKeyEnv, value: effectiveCompApiKeyValue }],
@@ -2115,14 +2167,14 @@ export function App() {
             body: JSON.stringify(sttEnvPayload),
           });
         } catch {
-          if (currentWorkspaceId) {
+          if (IS_TAURI && currentWorkspaceId) {
             await invoke("workspace_update_env", {
               workspaceId: currentWorkspaceId,
               entries: [{ key: effectiveSttApiKeyEnv, value: effectiveSttApiKeyValue }],
             });
           }
         }
-      } else if (currentWorkspaceId) {
+      } else if (IS_TAURI && currentWorkspaceId) {
         await invoke("workspace_update_env", {
           workspaceId: currentWorkspaceId,
           entries: [{ key: effectiveSttApiKeyEnv, value: effectiveSttApiKeyValue }],
@@ -2373,15 +2425,14 @@ export function App() {
               body: JSON.stringify(envPayload),
             });
           } catch {
-            // HTTP 回退
-            if (currentWorkspaceId) {
+            if (IS_TAURI && currentWorkspaceId) {
               await invoke("workspace_update_env", {
                 workspaceId: currentWorkspaceId,
                 entries: [{ key: editDraft.apiKeyEnv.trim(), value: editDraft.apiKeyValue.trim() }],
               });
             }
           }
-        } else if (currentWorkspaceId) {
+        } else if (IS_TAURI && currentWorkspaceId) {
           await invoke("workspace_update_env", {
             workspaceId: currentWorkspaceId,
             entries: [{ key: editDraft.apiKeyEnv.trim(), value: editDraft.apiKeyValue.trim() }],
@@ -2479,15 +2530,14 @@ export function App() {
             body: JSON.stringify(envPayload),
           });
         } catch {
-          // HTTP 回退到本地写入
-          if (currentWorkspaceId) {
+          if (IS_TAURI && currentWorkspaceId) {
             await invoke("workspace_update_env", {
               workspaceId: currentWorkspaceId,
               entries: [{ key: effectiveApiKeyEnv, value: effectiveApiKeyValue }],
             });
           }
         }
-      } else if (currentWorkspaceId) {
+      } else if (IS_TAURI && currentWorkspaceId) {
         await invoke("workspace_update_env", {
           workspaceId: currentWorkspaceId,
           entries: [{ key: effectiveApiKeyEnv, value: effectiveApiKeyValue }],
@@ -2630,8 +2680,7 @@ export function App() {
         console.warn("saveEnvKeys: HTTP failed, falling back to Tauri");
       }
     }
-    // ── 后端未运行 / HTTP 回退 → Tauri 本地写入 ──
-    if (currentWorkspaceId) {
+    if (IS_TAURI && currentWorkspaceId) {
       await ensureEnvLoaded(currentWorkspaceId);
       const tauriEntries = Object.entries(entries).map(([key, value]) => ({ key, value }));
       await invoke("workspace_update_env", { workspaceId: currentWorkspaceId, entries: tauriEntries });
@@ -3553,8 +3602,8 @@ export function App() {
 
     return (
       <>
-        {/* Banner: backend not running (hide during initial probe when serviceStatus is null) */}
-        {!serviceStatus?.running && serviceStatus !== null && effectiveWsId && (
+        {/* Banner: backend not running (hide during initial probe; hide in web mode — backend is always running) */}
+        {IS_TAURI && !serviceStatus?.running && serviceStatus !== null && effectiveWsId && (
           <div style={{
             marginBottom: 16, padding: "16px 20px", borderRadius: 10,
             background: "rgba(245, 158, 11, 0.15)",
@@ -3581,7 +3630,7 @@ export function App() {
           </div>
         )}
         {/* Banner: auto-starting backend (shown while serviceStatus is null and busy with auto-start) */}
-        {serviceStatus === null && !!busy && effectiveWsId && (
+        {IS_TAURI && serviceStatus === null && !!busy && effectiveWsId && (
           <div style={{
             marginBottom: 16, padding: "16px 20px", borderRadius: 10,
             background: "rgba(14, 165, 233, 0.15)",
@@ -3612,6 +3661,7 @@ export function App() {
               {serviceStatus === null ? (busy || t("topbar.starting")) : heartbeatState === "degraded" ? t("status.unresponsive") : serviceStatus?.running ? t("topbar.running") : t("topbar.stopped")}
               {serviceStatus?.pid ? <span className="statusCardSub"> PID {serviceStatus.pid}</span> : null}
             </div>
+            {IS_TAURI && (
             <div className="statusCardActions">
               {!serviceStatus?.running && serviceStatus !== null && effectiveWsId && (
                 <button className="btnSmall btnSmallPrimary" onClick={async () => {
@@ -3629,15 +3679,15 @@ export function App() {
                   setBusy(t("status.restarting")); setError(null);
                   try {
                     await doStopService(effectiveWsId);
-                    // 轮询等待旧服务完全关闭（端口释放），而非固定延时
                     await waitForServiceDown("http://127.0.0.1:18900", 15000);
                     await doStartLocalService(effectiveWsId);
                   } catch (e) { setError(String(e)); } finally { setBusy(null); }
                 }} disabled={!!busy}>{t("status.restart")}</button>
               </>)}
             </div>
+            )}
             {/* Multi-process warning */}
-            {detectedProcesses.length > 1 && (
+            {IS_TAURI && detectedProcesses.length > 1 && (
               <div style={{ marginTop: 8, padding: "6px 10px", background: "rgba(245, 158, 11, 0.15)", borderRadius: 6, fontSize: 12, color: "var(--warning)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", border: "1px solid rgba(245, 158, 11, 0.3)" }}>
                 <span style={{ fontWeight: 600 }}>⚠ 检测到 {detectedProcesses.length} 个 OpenAkita 进程正在运行</span>
                 <span style={{ color: "var(--warning)", fontSize: 11 }}>
@@ -3681,8 +3731,8 @@ export function App() {
             <div className="statusCardSub">{ws?.path || ""}</div>
           </div>
 
-          {/* Autostart (= desktop autostart + backend auto-launch) */}
-          <div className="statusCard">
+          {/* Autostart (= desktop autostart + backend auto-launch) — desktop only */}
+          {IS_TAURI && <div className="statusCard">
             <div className="statusCardHead">
               <span className="statusCardLabel">{t("status.autostart")}</span>
               {autostartEnabled ? <DotGreen /> : <DotGray />}
@@ -3695,12 +3745,10 @@ export function App() {
                 try { const next = !autostartEnabled; await invoke("autostart_set_enabled", { enabled: next }); setAutostartEnabled(next); } catch (e) { setError(String(e)); } finally { setBusy(null); }
               }} disabled={autostartEnabled === null || !!busy}>{autostartEnabled ? t("status.off") : t("status.on")}</button>
             </div>
-          </div>
+          </div>}
 
-          {/* Auto-start backend 已合并到"开机自启"中，不再单独展示 */}
-
-          {/* Auto-update toggle */}
-          <div className="statusCard">
+          {/* Auto-update toggle — desktop only */}
+          {IS_TAURI && <div className="statusCard">
             <div className="statusCardHead">
               <span className="statusCardLabel">{t("status.autoUpdate")}</span>
               {autoUpdateEnabled ? <DotGreen /> : <DotGray />}
@@ -3719,7 +3767,7 @@ export function App() {
                 } catch (e) { setError(String(e)); } finally { setBusy(null); }
               }} disabled={autoUpdateEnabled === null || !!busy}>{autoUpdateEnabled ? t("status.off") : t("status.on")}</button>
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* LLM Endpoints compact table */}
@@ -4041,7 +4089,7 @@ export function App() {
                   value={apiKeyValue}
                   onChange={(e) => setApiKeyValue(e.target.value)}
                   placeholder={isLocalProvider(selectedProvider) ? t("llm.localKeyPlaceholder") : "sk-..."}
-                  type={secretShown.__LLM_API_KEY ? "text" : "password"}
+                  type={(secretShown.__LLM_API_KEY && !IS_WEB) ? "text" : "password"}
                 />
                 {isLocalProvider(selectedProvider) && (
                   <div className="help" style={{ marginTop: 4, paddingLeft: 2, color: "var(--brand)" }}>{t("llm.localHint")}</div>
@@ -4239,10 +4287,10 @@ export function App() {
               <div className="dialogSection">
                 <div className="dialogLabel">API Key {isLocalProvider(providers.find((p) => p.slug === editDraft.providerSlug)) && <span style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>({t("llm.localNoKey")})</span>}</div>
                 <div style={{ position: "relative" }}>
-                  <input value={envDraft[editDraft.apiKeyEnv || ""] || ""} onChange={(e) => { const k = editDraft.apiKeyEnv || ""; const v = e.target.value; setEnvDraft((m) => ({ ...m, [k]: v })); setEditDraft((d) => d ? { ...d, apiKeyValue: v } : d); }} type={secretShown.__EDIT_EP_KEY ? "text" : "password"} style={{ paddingRight: 44, width: "100%" }} placeholder={isLocalProvider(providers.find((p) => p.slug === editDraft.providerSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} />
-                  <button type="button" className="btnEye" onClick={() => setSecretShown((m) => ({ ...m, __EDIT_EP_KEY: !m.__EDIT_EP_KEY }))} title={secretShown.__EDIT_EP_KEY ? "隐藏" : "显示"}>
+                  <input value={envDraft[editDraft.apiKeyEnv || ""] || ""} onChange={(e) => { const k = editDraft.apiKeyEnv || ""; const v = e.target.value; setEnvDraft((m) => ({ ...m, [k]: v })); setEditDraft((d) => d ? { ...d, apiKeyValue: v } : d); }} type={(secretShown.__EDIT_EP_KEY && !IS_WEB) ? "text" : "password"} style={{ paddingRight: 44, width: "100%" }} placeholder={isLocalProvider(providers.find((p) => p.slug === editDraft.providerSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} />
+                  {!IS_WEB && <button type="button" className="btnEye" onClick={() => setSecretShown((m) => ({ ...m, __EDIT_EP_KEY: !m.__EDIT_EP_KEY }))} title={secretShown.__EDIT_EP_KEY ? "隐藏" : "显示"}>
                     {secretShown.__EDIT_EP_KEY ? <IconEyeOff size={16} /> : <IconEye size={16} />}
-                  </button>
+                  </button>}
                 </div>
                 {isLocalProvider(providers.find((p) => p.slug === editDraft.providerSlug)) && <div className="help" style={{ marginTop: 4, paddingLeft: 2, color: "var(--brand)" }}>{t("llm.localHint")}</div>}
               </div>
@@ -5000,13 +5048,15 @@ export function App() {
 
         </div>
 
-        {/* ── CLI 命令行工具管理 ── */}
+        {/* ── CLI 命令行工具管理 (desktop only) ── */}
+        {IS_TAURI && (
         <div className="card" style={{ marginTop: 16 }}>
           <div className="cardTitle">CLI 命令行工具</div>
           <div className="cardHint">管理终端命令注册，注册后可在 CMD / PowerShell / 终端中直接使用 oa 或 openakita 命令。</div>
           <div className="divider" />
           <CliManager />
         </div>
+        )}
       </>
     );
   }
@@ -5084,7 +5134,7 @@ export function App() {
 
 
     async function exportEnv() {
-      if (!currentWorkspaceId) return;
+      if (!currentWorkspaceId || !IS_TAURI) { if (!IS_TAURI) setError("Web 模式暂不支持导出 .env"); return; }
       try {
         const content = await invoke<string>("workspace_read_file", { workspaceId: currentWorkspaceId, relativePath: ".env" });
         const blob = new Blob([content], { type: "text/plain" });
@@ -5134,16 +5184,13 @@ export function App() {
             setBackupSettingsLoaded(true);
           }
         } catch { /* backend not available, use defaults */ }
-      } else {
-        // Try reading from workspace file via Tauri
-        if (currentWorkspaceId) {
-          try {
-            const content = await invoke<string>("workspace_read_file", { workspaceId: currentWorkspaceId, relativePath: "data/backup_settings.json" });
-            const parsed = JSON.parse(content);
-            setBackupSettings((prev) => ({ ...prev, ...parsed }));
-            setBackupSettingsLoaded(true);
-          } catch { /* file doesn't exist yet, use defaults */ }
-        }
+      } else if (IS_TAURI && currentWorkspaceId) {
+        try {
+          const content = await invoke<string>("workspace_read_file", { workspaceId: currentWorkspaceId, relativePath: "data/backup_settings.json" });
+          const parsed = JSON.parse(content);
+          setBackupSettings((prev) => ({ ...prev, ...parsed }));
+          setBackupSettingsLoaded(true);
+        } catch { /* file doesn't exist yet, use defaults */ }
       }
     }
 
@@ -5159,7 +5206,7 @@ export function App() {
           });
           setNotice(t("adv.backupSaved"));
         } catch (e) { setError(String(e)); }
-      } else if (currentWorkspaceId) {
+      } else if (IS_TAURI && currentWorkspaceId) {
         try {
           await invoke("workspace_write_file", {
             workspaceId: currentWorkspaceId,
@@ -5177,10 +5224,10 @@ export function App() {
       if (!outputDir) {
         // Use dialog to pick folder
         try {
-          const { open } = await import("@tauri-apps/plugin-dialog");
-          const selected = await open({ directory: true, multiple: false, title: t("adv.backupPath") });
+          const { openFileDialog } = await import("./platform");
+          const selected = await openFileDialog({ directory: true, title: t("adv.backupPath") });
           if (!selected) return;
-          outputDir = selected as string;
+          outputDir = selected;
           setBackupSettings((prev) => ({ ...prev, backup_path: outputDir }));
         } catch (e) { setError(String(e)); return; }
       }
@@ -5205,10 +5252,8 @@ export function App() {
     async function runBackupImport() {
       if (!currentWorkspaceId) return;
       try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const selected = await open({ multiple: false, title: t("adv.backupImport"), filters: [{ name: "Backup", extensions: ["zip"] }] });
-        if (!selected) return;
-        const zipPath = (typeof selected === "string" ? selected : (selected as any)?.path) as string;
+        const { openFileDialog } = await import("./platform");
+        const zipPath = await openFileDialog({ title: t("adv.backupImport"), filters: [{ name: "Backup", extensions: ["zip"] }] });
         if (!zipPath) return;
         if (!confirm(t("adv.backupImportConfirm"))) return;
         setBusy(t("adv.backupExporting"));
@@ -5233,10 +5278,10 @@ export function App() {
 
     async function browseBackupPath() {
       try {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const selected = await open({ directory: true, multiple: false, title: t("adv.backupPath") });
+        const { openFileDialog } = await import("./platform");
+        const selected = await openFileDialog({ directory: true, title: t("adv.backupPath") });
         if (selected) {
-          setBackupSettings((prev) => ({ ...prev, backup_path: selected as string }));
+          setBackupSettings((prev) => ({ ...prev, backup_path: selected }));
         }
       } catch (e) { setError(String(e)); }
     }
@@ -5267,8 +5312,8 @@ export function App() {
 
     return (
       <>
-        {/* ── Python 环境诊断 ── */}
-        <div className="card">
+        {/* ── Python 环境诊断 (desktop only) ── */}
+        <div className="card" style={IS_WEB ? { display: "none" } : undefined}>
           {sectionHeader("python", t("adv.pythonTitle"))}
             <div style={{ paddingLeft: 22 }}>
               <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.pythonHint")}</div>
@@ -5419,6 +5464,17 @@ export function App() {
           </div>
         </div>
 
+        {/* ── Web 访问密码管理 (desktop only) ── */}
+        {IS_TAURI && shouldUseHttpApi() && (
+        <div className="card" style={{ marginTop: 12 }}>
+          {sectionHeader("webpw", t("adv.webPasswordTitle"))}
+          <div style={{ paddingLeft: 22 }}>
+            <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.webPasswordHint")}</div>
+            <WebPasswordManager apiBase={httpApiBase()} busy={busy} setBusy={setBusy} setNotice={setNotice} setError={setError} />
+          </div>
+        </div>
+        )}
+
         {/* ── .env 导出/导入（保留旧功能） ── */}
         <div className="card" style={{ marginTop: 12 }}>
           {sectionHeader("envio", t("adv.export").replace(" .env", "") + " / " + t("adv.import").replace(" .env", "") + " .env")}
@@ -5516,12 +5572,12 @@ export function App() {
                 <button className="btnSmall btnSmallPrimary" onClick={async () => { await saveBackupSettings(); }} disabled={!!busy}>
                   {t("common.save") || "保存设置"}
                 </button>
-                <button className="btnSmall" onClick={runBackupNow} disabled={!currentWorkspaceId || !!busy}>
+                {IS_TAURI && <button className="btnSmall" onClick={runBackupNow} disabled={!currentWorkspaceId || !!busy}>
                   {t("adv.backupNow")}
-                </button>
-                <button className="btnSmall" onClick={runBackupImport} disabled={!currentWorkspaceId || !!busy}>
+                </button>}
+                {IS_TAURI && <button className="btnSmall" onClick={runBackupImport} disabled={!currentWorkspaceId || !!busy}>
                   {t("adv.backupImport")}
-                </button>
+                </button>}
               </div>
 
               {/* 历史备份列表 */}
@@ -6114,7 +6170,7 @@ export function App() {
         console.warn("saveEnvKeysExternal: HTTP failed, falling back to Tauri");
       }
     }
-    if (currentWorkspaceId) {
+    if (IS_TAURI && currentWorkspaceId) {
       const tauriEntries = Object.entries(entries).map(([key, value]) => ({ key, value }));
       await invoke("workspace_update_env", { workspaceId: currentWorkspaceId, entries: tauriEntries });
     }
@@ -6122,6 +6178,7 @@ export function App() {
 
   // ── Onboarding Wizard 渲染 ──
   async function obLoadModules() {
+    if (!IS_TAURI) return;
     try {
       const modules = await invoke<ModuleInfo[]>("detect_modules");
       setObModules(modules);
@@ -6135,6 +6192,7 @@ export function App() {
   }
 
   async function obLoadEnvCheck() {
+    if (!IS_TAURI) return;
     try {
       const check = await invoke<typeof obEnvCheck>("check_environment");
       setObEnvCheck(check);
@@ -6168,6 +6226,7 @@ export function App() {
   }
 
   async function obRunSetup() {
+    if (!IS_TAURI) return;
     setObInstalling(true);
     setObInstallLog([]);
     setObDetailLog([]);
@@ -7249,7 +7308,7 @@ export function App() {
               <p style={{ color: "#94a3b8", fontSize: 15 }}>此模块已禁用，点击上方开关启用</p>
             </div>
           ) : (
-            <SchedulerView serviceRunning={serviceStatus?.running ?? false} />
+            <SchedulerView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
           )}
         </div>
       );
@@ -7263,7 +7322,7 @@ export function App() {
               <p style={{ color: "#94a3b8", fontSize: 15 }}>此模块已禁用，点击上方开关启用</p>
             </div>
           ) : (
-            <MemoryView serviceRunning={serviceStatus?.running ?? false} />
+            <MemoryView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
           )}
         </div>
       );
@@ -7329,6 +7388,7 @@ export function App() {
                   const { id, name } = moduleUninstallPending;
                   setBusy(t("status.stopping"));
                   setError(null);
+                  if (!IS_TAURI) { setError("模块管理仅限桌面端"); return; }
                   try {
                     const ss = await invoke<{ running: boolean; pid: number | null; pidFile: string }>("openakita_service_stop", { workspaceId: currentWorkspaceId });
                     setServiceStatus(ss);
@@ -7365,6 +7425,7 @@ export function App() {
                         className="btnSmall"
                         style={{ color: "#ef4444" }}
                         onClick={async () => {
+                          if (!IS_TAURI) return;
                           const doUninstall = async () => {
                             await invoke("uninstall_module", { moduleId: m.id });
                             setNotice(t("modules.uninstalled", { name: m.name }));
@@ -7399,6 +7460,7 @@ export function App() {
                     <button
                       className="btnPrimary btnSmall"
                       onClick={async () => {
+                        if (!IS_TAURI) return;
                         try {
                           setBusy(t("modules.installing", { name: m.name }));
                           await invoke("install_module", { moduleId: m.id, mirror: null });
@@ -7473,6 +7535,14 @@ export function App() {
     );
   }
 
+  // ── Web auth gate: show login page if not authenticated ──
+  if (IS_WEB && !webAuthed) {
+    if (authChecking) {
+      return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--text3, #94a3b8)" }}>Loading...</div>;
+    }
+    return <LoginView apiBaseUrl="" onLoginSuccess={() => { installFetchInterceptor(); setWebAuthed(true); }} />;
+  }
+
   return (
     <EnvFieldContext.Provider value={envFieldCtx}>
     <div className={`appShell ${sidebarCollapsed ? "appShellCollapsed" : ""}`}>
@@ -7498,6 +7568,7 @@ export function App() {
         serviceRunning={serviceStatus?.running ?? false}
         onBugReport={() => setBugReportOpen(true)}
         onRefreshStatus={async () => { await refreshStatus(undefined, undefined, true); }}
+        isWeb={IS_WEB}
       />
 
       <main className="main">
@@ -7513,6 +7584,10 @@ export function App() {
           setWsQuickName={setWsQuickName}
           onCreateWorkspace={async (id, name) => {
             try {
+              if (IS_WEB) {
+                setError("工作区管理暂不支持 Web 模式，请在桌面端操作");
+                return;
+              }
               await invoke("create_workspace", { id, name, setCurrent: true });
               await refreshAll();
               setCurrentWorkspaceId(id);
@@ -7542,6 +7617,12 @@ export function App() {
           onRefreshAll={async () => { await refreshAll(); try { await refreshStatus(undefined, undefined, true); } catch {} }}
           toggleTheme={toggleTheme}
           themePrefState={themePrefState}
+          isWeb={IS_WEB}
+          onLogout={IS_WEB ? async () => {
+            const { logout } = await import("./platform/auth");
+            await logout();
+            setWebAuthed(false);
+          } : undefined}
         />
 
         {/* ChatView 始终挂载，切走时隐藏以保留聊天记录 */}

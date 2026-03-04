@@ -36,7 +36,7 @@ type ReviewResult = {
   errors: number;
 };
 
-const API_BASE = "http://127.0.0.1:18900";
+// API_BASE is derived from the apiBaseUrl prop (empty string = relative path for web mode)
 
 const TYPE_LABELS: Record<string, string> = {
   fact: "事实",
@@ -72,9 +72,11 @@ function fmtDate(iso: string | null): string {
 
 interface Props {
   serviceRunning: boolean;
+  apiBaseUrl?: string;
 }
 
-export function MemoryView({ serviceRunning }: Props) {
+export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
+  const API_BASE = apiBaseUrl;
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);

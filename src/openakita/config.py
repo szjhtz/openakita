@@ -368,6 +368,14 @@ class Settings(BaseSettings):
         default="https://openakita.ai/api",
         description="OpenAkita Platform API base URL for Agent Hub and Skill Store",
     )
+    hub_api_key: str = Field(
+        default="",
+        description="OpenAkita Platform API Key (ak_live_...)",
+    )
+    hub_device_id: str = Field(
+        default="",
+        description="Local device identifier (auto-generated UUID)",
+    )
 
     # === Harness 配置 ===
     supervisor_enabled: bool = Field(default=True, description="是否启用运行时监督器 (RuntimeSupervisor)")

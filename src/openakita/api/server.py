@@ -15,17 +15,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import time
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .auth import WebAccessConfig, create_auth_middleware
 from .routes import (
     agents,
+    auth as auth_routes,
     bug_report,
     chat,
     chat_models,
@@ -42,12 +46,13 @@ from .routes import (
     skills,
     token_stats,
     upload,
+    websocket as ws_routes,
     workspace_io,
 )
 
 logger = logging.getLogger(__name__)
 
-API_HOST = "127.0.0.1"
+API_HOST = os.environ.get("API_HOST", "127.0.0.1")
 API_PORT = 18900
 
 
@@ -73,6 +78,42 @@ def wait_for_port_free(host: str, port: int, timeout: float = 30.0) -> bool:
             return True
         time.sleep(0.5)
     return False
+
+
+def _find_web_dist() -> Path | None:
+    """Locate the web frontend dist directory.
+
+    Search order:
+    1. openakita/web/ (installed via pip wheel)
+    2. apps/setup-center/dist-web/ (development)
+    """
+    # Inside the installed package
+    pkg_web = Path(__file__).parent.parent / "web"
+    if (pkg_web / "index.html").exists():
+        return pkg_web
+
+    # Development: relative to project root
+    dev_web = Path(__file__).parent.parent.parent.parent / "apps" / "setup-center" / "dist-web"
+    if (dev_web / "index.html").exists():
+        return dev_web
+
+    return None
+
+
+def _mount_web_frontend(app: FastAPI) -> None:
+    """Mount the web frontend static files if available.
+
+    Uses StaticFiles for /web/* with html=True for SPA fallback (index.html).
+    """
+    from fastapi.staticfiles import StaticFiles
+
+    web_dist = _find_web_dist()
+    if not web_dist:
+        logger.debug("Web frontend not found, skipping static file mount")
+        return
+
+    logger.info(f"Mounting web frontend from {web_dist}")
+    app.mount("/web", StaticFiles(directory=str(web_dist), html=True), name="web-frontend")
 
 
 def create_app(
@@ -106,14 +147,34 @@ def create_app(
             content={"detail": "; ".join(msgs) if msgs else "Validation error"},
         )
 
-    # CORS: 允许 Setup Center (localhost) 访问
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # Setup Center 从 Tauri webview 请求
+    # CORS configuration
+    # NOTE: allow_origins=["*"] is incompatible with allow_credentials=True per
+    # the browser spec.  When no explicit origins are configured we fall back to
+    # allow_origin_func which echoes the request Origin, achieving the same
+    # permissive behaviour while satisfying the spec.
+    cors_origins = os.environ.get("CORS_ORIGINS", "").strip()
+    cors_kwargs: dict[str, Any] = dict(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if cors_origins:
+        cors_kwargs["allow_origins"] = [o.strip() for o in cors_origins.split(",") if o.strip()]
+    else:
+        cors_kwargs["allow_origin_func"] = lambda origin: True
+    app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+    # Web access authentication
+    try:
+        from openakita.config import settings
+        data_dir = Path(settings.project_root) / "data"
+    except Exception:
+        data_dir = Path.cwd() / "data"
+    web_access_config = WebAccessConfig(data_dir)
+    app.state.web_access_config = web_access_config
+
+    auth_mw = create_auth_middleware(web_access_config)
+    app.middleware("http")(auth_mw)
 
     # Store references in app state
     app.state.agent = agent
@@ -124,6 +185,7 @@ def create_app(
     app.state.agent_pool = agent_pool
 
     # Mount routes
+    app.include_router(auth_routes.router)
     app.include_router(agents.router)
     app.include_router(bug_report.router)
     app.include_router(chat.router)
@@ -141,28 +203,43 @@ def create_app(
     app.include_router(token_stats.router)
     app.include_router(upload.router)
     app.include_router(workspace_io.router)
+    app.include_router(ws_routes.router)
     app.include_router(hub.router)
 
     @app.get("/")
     async def root():
+        # If web frontend is available, redirect to it
+        web_dist = _find_web_dist()
+        if web_dist:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/web/")
         return {
             "service": "openakita",
             "api_version": "1.0.0",
             "status": "running",
         }
 
+    # ── Serve web frontend static files ──
+    _mount_web_frontend(app)
+
     @app.post("/api/shutdown")
-    async def shutdown():
+    async def shutdown(request: Request):
         """Gracefully shut down the OpenAkita service process.
 
+        Only allowed from localhost for security.
         Uses the shared shutdown_event to trigger the same graceful cleanup
         path as SIGINT/SIGTERM (sessions saved, IM adapters stopped, etc.).
         """
+        from .auth import _is_local_request
+        if not _is_local_request(request):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Shutdown only allowed from localhost"},
+            )
         logger.info("Shutdown requested via API")
         if app.state.shutdown_event is not None:
             app.state.shutdown_event.set()
             return {"status": "shutting_down"}
-        # Fallback: no shutdown_event (e.g. running outside of `openakita serve`)
         logger.warning("No shutdown_event available, shutdown request ignored")
         return {"status": "error", "message": "shutdown not available in this mode"}
 

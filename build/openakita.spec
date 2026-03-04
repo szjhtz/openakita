@@ -77,6 +77,22 @@ hidden_imports_core = [
     "openakita.tools",
     "openakita.tools.shell",
     "openakita.tools._import_helper",
+    # -- Hub & Store (Agent Store / Skill Store 平台集成) --
+    "openakita.hub",
+    "openakita.hub.agent_hub_client",
+    "openakita.hub.skill_store_client",
+    "openakita.agents.packager",
+    # -- tools.handlers / definitions (新增模块需显式声明，避免缓存遗漏) --
+    "openakita.tools.handlers.agent_hub",
+    "openakita.tools.handlers.skill_store",
+    "openakita.tools.handlers.agent",
+    "openakita.tools.handlers.agent_package",
+    "openakita.tools.handlers.config",
+    "openakita.tools.definitions.agent_hub",
+    "openakita.tools.definitions.skill_store",
+    "openakita.tools.definitions.agent",
+    "openakita.tools.definitions.agent_package",
+    "openakita.tools.definitions.config",
     # -- LLM registries (dynamically imported via import_module, PyInstaller can't trace) --
     "openakita.llm.registries",
     "openakita.llm.registries.base",

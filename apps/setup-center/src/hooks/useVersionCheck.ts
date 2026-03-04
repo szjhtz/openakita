@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
-import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { getAppVersion, checkForUpdate, relaunchApp, type UpdateInfo } from "../platform";
 
 const GITHUB_REPO = "openakita/openakita";
 
@@ -21,7 +19,7 @@ export function useVersionCheck() {
   const [backendVersion, setBackendVersion] = useState<string | null>(null);
   const [versionMismatch, setVersionMismatch] = useState<{ backend: string; desktop: string } | null>(null);
   const [newRelease, setNewRelease] = useState<{ latest: string; current: string; url: string } | null>(null);
-  const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null);
   const [updateProgress, setUpdateProgress] = useState<{
     status: "idle" | "downloading" | "installing" | "done" | "error";
     percent?: number;
@@ -29,7 +27,7 @@ export function useVersionCheck() {
   }>({ status: "idle" });
 
   useEffect(() => {
-    getVersion().then((v) => setDesktopVersion(v)).catch(() => setDesktopVersion("1.10.5"));
+    getAppVersion().then((v) => setDesktopVersion(v)).catch(() => setDesktopVersion("1.10.5"));
   }, []);
 
   const checkVersionMismatch = useCallback((bv: string) => {
@@ -43,7 +41,7 @@ export function useVersionCheck() {
   const checkForAppUpdate = useCallback(async () => {
     const dismissKey = "openakita_release_dismissed";
     try {
-      const update = await checkUpdate();
+      const update = await checkForUpdate();
       if (update) {
         const dismissed = localStorage.getItem(dismissKey);
         if (dismissed !== update.version) {
@@ -103,7 +101,7 @@ export function useVersionCheck() {
 
   const doRelaunchAfterUpdate = useCallback(async () => {
     try {
-      await relaunch();
+      await relaunchApp();
     } catch {
       setUpdateProgress({ status: "error", error: "请手动重启应用以完成更新" });
     }

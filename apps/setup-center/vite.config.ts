@@ -2,9 +2,14 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+const isWebBuild = process.env.VITE_BUILD_TARGET === "web";
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __BUILD_TARGET__: JSON.stringify(isWebBuild ? "web" : "tauri"),
+  },
   resolve: {
     alias: {
       // 唯一数据源: Python 后端的 providers.json
@@ -16,9 +21,34 @@ export default defineConfig({
       ),
     },
   },
+  base: isWebBuild ? "/web/" : undefined,
+  build: isWebBuild
+    ? {
+        outDir: "dist-web",
+        rollupOptions: {
+          external: [
+            /^@tauri-apps\//,
+          ],
+        },
+      }
+    : undefined,
   server: {
     port: 5173,
     strictPort: true,
+    ...(isWebBuild
+      ? {
+          proxy: {
+            "/api": {
+              target: "http://127.0.0.1:18900",
+              changeOrigin: true,
+            },
+            "/ws": {
+              target: "ws://127.0.0.1:18900",
+              ws: true,
+            },
+          },
+        }
+      : {}),
   },
   clearScreen: false,
 });

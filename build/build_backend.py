@@ -287,6 +287,12 @@ def clean_dist():
         print(f"  Cleaning PyInstaller work directory: {pyinstaller_work}")
         shutil.rmtree(pyinstaller_work)
 
+    # Clean legacy PyInstaller analysis cache (from builds that used default workpath)
+    legacy_cache = PROJECT_ROOT / "build" / "openakita"
+    if legacy_cache.exists():
+        print(f"  Cleaning legacy PyInstaller cache: {legacy_cache}")
+        shutil.rmtree(legacy_cache)
+
 
 def ensure_playwright_chromium():
     """Ensure Playwright Chromium is installed for bundling"""
@@ -391,6 +397,18 @@ def build_backend(mode: str, fast: bool = False):
     create_stdlib_zip(OUTPUT_DIR)
     ensure_bundled_pth_file(OUTPUT_DIR)
     verify_bundled_python_contract(OUTPUT_DIR)
+
+    # Include web frontend if available
+    web_dist = PROJECT_ROOT / "apps" / "setup-center" / "dist-web"
+    if web_dist.exists() and (web_dist / "index.html").exists():
+        web_dest = OUTPUT_DIR / "_internal" / "openakita" / "web"
+        if web_dest.exists():
+            shutil.rmtree(web_dest)
+        shutil.copytree(web_dist, web_dest)
+        web_files = sum(1 for _ in web_dest.rglob("*") if _.is_file())
+        print(f"  [OK] Web frontend included ({web_files} files)")
+    else:
+        print("  [INFO] Web frontend not found (build with: cd apps/setup-center && VITE_BUILD_TARGET=web npm run build:web)")
 
     # Calculate size
     total_size = sum(f.stat().st_size for f in OUTPUT_DIR.rglob("*") if f.is_file())

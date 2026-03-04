@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../platform";
 
 export function CliManager() {
   const [cliStatus, setCliStatus] = useState<{

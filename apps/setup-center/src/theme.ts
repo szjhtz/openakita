@@ -29,13 +29,11 @@ export function applyTheme(theme: Theme) {
   document.documentElement.setAttribute("data-theme", activeTheme);
 
   // Sync native window theme in Tauri
-  try {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
       const win = getCurrentWindow();
       win.setTheme(theme === "system" ? null : theme);
     }).catch(() => {});
-  } catch (e) {
-    // Ignore if not running within Tauri
   }
 }
 

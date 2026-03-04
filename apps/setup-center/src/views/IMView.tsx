@@ -129,7 +129,7 @@ export function IMView({
   apiBaseUrl?: string;
 }) {
   const { t } = useTranslation();
-  const api = apiBaseUrl || DEFAULT_API;
+  const api = apiBaseUrl ?? DEFAULT_API;
   const [tab, setTab] = useState<"messages" | "bots">("messages");
   const [channels, setChannels] = useState<IMChannel[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);

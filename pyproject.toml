@@ -178,6 +178,8 @@ packages = ["src/openakita"]
 # skills/*      → site-packages/openakita/builtin_skills/external/  (不含 system/)
 # mcps          → site-packages/openakita/builtin_mcps/
 [tool.hatch.build.targets.wheel.force-include]
+# Web frontend (built with: cd apps/setup-center && VITE_BUILD_TARGET=web npm run build:web)
+"apps/setup-center/dist-web" = "openakita/web"
 "skills/system" = "openakita/builtin_skills/system"
 "mcps" = "openakita/builtin_mcps"
 "skills/xiaohongshu-creator" = "openakita/builtin_skills/external/xiaohongshu-creator"

@@ -49,6 +49,11 @@ class SkillEntry:
     tool_name: str | None = None
     category: str | None = None
 
+    # metadata.openakita structured fields
+    supported_os: list[str] = field(default_factory=list)
+    required_bins: list[str] = field(default_factory=list)
+    required_env: list[str] = field(default_factory=list)
+
     # 技能路径 (用于延迟加载)
     skill_path: str | None = None
 
@@ -90,6 +95,9 @@ class SkillEntry:
             handler=meta.handler,
             tool_name=meta.tool_name,
             category=meta.category,
+            supported_os=list(meta.supported_os),
+            required_bins=list(meta.required_bins),
+            required_env=list(meta.required_env),
             skill_path=str(skill.path),
             name_i18n=dict(meta.name_i18n),
             description_i18n=dict(meta.description_i18n),

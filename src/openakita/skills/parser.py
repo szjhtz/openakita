@@ -53,6 +53,11 @@ class SkillMetadata:
     tool_name: str | None = None  # 原工具名称（用于兼容）
     category: str | None = None  # 工具分类
 
+    # metadata.openakita structured fields
+    supported_os: list[str] = field(default_factory=list)
+    required_bins: list[str] = field(default_factory=list)
+    required_env: list[str] = field(default_factory=list)
+
     # 配置 schema（供 Setup Center 自动生成配置表单）
     # 每个元素: {"key": str, "label": str, "type": "text"|"secret"|"number"|"select"|"bool",
     #            "required": bool, "help": str, "default": Any, "options": list, "min": num, "max": num}
@@ -278,19 +283,48 @@ class SkillParser:
                         "max": item.get("max"),
                     })
 
+        # Extract metadata.openakita structured fields
+        raw_metadata = data.get("metadata", {})
+        akita_meta = raw_metadata.get("openakita", {}) if isinstance(raw_metadata, dict) else {}
+        if not isinstance(akita_meta, dict):
+            akita_meta = {}
+
+        supported_os: list[str] = []
+        required_bins: list[str] = []
+        required_env: list[str] = []
+
+        if akita_meta:
+            os_val = akita_meta.get("os", [])
+            if isinstance(os_val, list):
+                supported_os = [str(o) for o in os_val]
+            elif isinstance(os_val, str):
+                supported_os = [o.strip() for o in os_val.split(",") if o.strip()]
+
+            requires = akita_meta.get("requires", {})
+            if isinstance(requires, dict):
+                bins_val = requires.get("bins", [])
+                if isinstance(bins_val, list):
+                    required_bins = [str(b) for b in bins_val]
+                env_val = requires.get("env", [])
+                if isinstance(env_val, list):
+                    required_env = [str(e) for e in env_val]
+
         return SkillMetadata(
             name=name,
             description=description.strip(),
             version=data.get("version"),
             license=data.get("license"),
             compatibility=data.get("compatibility"),
-            metadata=data.get("metadata", {}),
+            metadata=raw_metadata if isinstance(raw_metadata, dict) else {},
             allowed_tools=allowed_tools,
             disable_model_invocation=data.get("disable-model-invocation", False),
             system=system,
             handler=handler,
             tool_name=tool_name,
             category=category,
+            supported_os=supported_os,
+            required_bins=required_bins,
+            required_env=required_env,
             config=config,
         )
 

@@ -1,6 +1,7 @@
 // ─── Provider-related utility functions for Setup Center ───
 
-import { invoke } from "@tauri-apps/api/core";
+import { IS_WEB, proxyFetch } from "./platform";
+import { authFetch } from "./platform/auth";
 import type { ProviderInfo, ListedModel } from "./types";
 
 /** 判断服务商是否为本地服务（不需要真实 API Key） */
@@ -233,10 +234,13 @@ export async function fetchModelsDirectly(params: {
 /**
  * fetch wrapper: 在 HTTP 4xx/5xx 时自动抛异常（原生 fetch 只在网络错误时才抛）。
  * 所有对后端 API 的调用都应使用此函数，以确保错误被正确捕获。
+ * Web 模式下自动携带 JWT token 并支持静默续期。
  */
 export async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
   const effectiveInit = init?.signal ? init : { ...init, signal: AbortSignal.timeout(10_000) };
-  const res = await fetch(url, effectiveInit);
+  const res = IS_WEB
+    ? await authFetch(url, effectiveInit)
+    : await fetch(url, effectiveInit);
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -248,22 +252,7 @@ export async function safeFetch(url: string, init?: RequestInit): Promise<Respon
   return res;
 }
 
-/**
- * 通过 Rust http_proxy_request 命令发送 HTTP 请求，绕过 WebView 的 CORS 限制。
- * 当前端需要直连外部 API（如 LLM 服务商）但 Python 后端未运行时使用。
- */
-export async function proxyFetch(url: string, options?: {
-  method?: string;
-  headers?: Record<string, string>;
-  body?: string;
-  timeoutSecs?: number;
-}): Promise<{ status: number; body: string }> {
-  const raw = await invoke<string>("http_proxy_request", {
-    url,
-    method: options?.method ?? "GET",
-    headers: options?.headers ?? null,
-    body: options?.body ?? null,
-    timeoutSecs: options?.timeoutSecs ?? 30,
-  });
-  return JSON.parse(raw) as { status: number; body: string };
-}
+// Re-export proxyFetch from platform layer for backward compatibility.
+// Tauri: proxied through Rust to bypass WebView CORS.
+// Web: direct fetch (same-origin, no CORS issue).
+export { proxyFetch } from "./platform";

@@ -238,12 +238,8 @@ document.addEventListener("click", (e) => {
   // Prevent webview navigation; open in OS default browser instead
   e.preventDefault();
   e.stopPropagation();
-  // Use Tauri's invoke to open URL externally (if the command is available)
-  import("@tauri-apps/api/core").then(({ invoke }) => {
-    invoke("open_external_url", { url: href }).catch(() => {
-      // Fallback: use window.open which Tauri may handle
-      window.open(href, "_blank");
-    });
+  import("./platform").then(({ openExternalUrl }) => {
+    openExternalUrl(href);
   }).catch(() => {
     window.open(href, "_blank");
   });

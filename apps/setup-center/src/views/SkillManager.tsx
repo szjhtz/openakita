@@ -2,7 +2,7 @@
 // 支持已安装技能列表、配置表单自动生成、启用/禁用、技能市场浏览与安装
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, IS_TAURI } from "../platform";
 import { useTranslation } from "react-i18next";
 import type { SkillInfo, SkillConfigField, MarketplaceSkill, EnvMap } from "../types";
 import { envGet, envSet } from "../utils";
@@ -341,7 +341,7 @@ export function SkillManager({
       let httpError: string | null = null;
 
       // 优先从运行中的服务 HTTP API 获取（远程模式或本地服务运行时）
-      if (serviceRunning && apiBaseUrl) {
+      if (serviceRunning && apiBaseUrl != null) {
         try {
           const res = await fetch(`${apiBaseUrl}/api/skills`, { signal: AbortSignal.timeout(5000) });
           if (res.ok) {
@@ -355,7 +355,7 @@ export function SkillManager({
       }
 
       // Fallback: Tauri 本地命令（仅本地模式，且 HTTP 未成功时）
-      if (!data && dataMode !== "remote" && venvDir && currentWorkspaceId) {
+      if (!data && IS_TAURI && dataMode !== "remote" && venvDir && currentWorkspaceId) {
         try {
           const raw = await invoke<string>("openakita_list_skills", { venvDir, workspaceId: currentWorkspaceId });
           data = JSON.parse(raw);
@@ -488,7 +488,7 @@ export function SkillManager({
         updated_at: new Date().toISOString(),
       };
 
-      if (serviceRunning && apiBaseUrl) {
+      if (serviceRunning && apiBaseUrl != null) {
         const res = await fetch(`${apiBaseUrl}/api/config/skills`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -508,7 +508,7 @@ export function SkillManager({
             signal: AbortSignal.timeout(10_000),
           });
         } catch { /* reload 失败不阻塞 */ }
-      } else if (dataMode !== "remote" && currentWorkspaceId) {
+      } else if (IS_TAURI && dataMode !== "remote" && currentWorkspaceId) {
         await invoke("workspace_write_file", {
           workspaceId: currentWorkspaceId,
           relativePath: "data/skills.json",
@@ -587,15 +587,13 @@ export function SkillManager({
     setLocalImporting(true);
     setError(null);
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true, multiple: false, title: t("skills.importLocalTitle") });
-      if (!selected) { setLocalImporting(false); return; }
-
-      const folderPath = typeof selected === "string" ? selected : String(selected);
+      const { openFileDialog } = await import("../platform");
+      const folderPath = await openFileDialog({ directory: true, title: t("skills.importLocalTitle") });
+      if (!folderPath) { setLocalImporting(false); return; }
 
       let installed = false;
 
-      if (serviceRunning && apiBaseUrl) {
+      if (serviceRunning && apiBaseUrl != null) {
         const res = await fetch(`${apiBaseUrl}/api/skills/install`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -615,7 +613,7 @@ export function SkillManager({
         } catch { /* reload 失败不阻塞 */ }
       }
 
-      if (!installed && currentWorkspaceId) {
+      if (!installed && IS_TAURI && currentWorkspaceId) {
         await invoke<string>("openakita_install_skill", {
           venvDir,
           workspaceId: currentWorkspaceId,
@@ -674,7 +672,7 @@ export function SkillManager({
 
       if (dataMode === "remote") {
         // 远程模式：只走后端 API 代理（Tauri 不可用）
-        if (serviceRunning && apiBaseUrl) {
+        if (serviceRunning && apiBaseUrl != null) {
           try {
             const res = await fetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
               signal: AbortSignal.timeout(10000),
@@ -689,14 +687,15 @@ export function SkillManager({
           data = await res.json();
         }
       } else {
-        // 本地模式：方式1 Tauri invoke 代理（绕过 CORS）
-        try {
-          const raw = await invoke<string>("http_get_json", { url });
-          data = JSON.parse(raw);
-        } catch { /* Tauri 不可用或命令不存在，继续 fallback */ }
+        if (IS_TAURI) {
+          try {
+            const raw = await invoke<string>("http_get_json", { url });
+            data = JSON.parse(raw);
+          } catch { /* Tauri invoke 失败，继续 fallback */ }
+        }
 
         // 方式2: 通过后端 API 代理
-        if (!data && serviceRunning && apiBaseUrl) {
+        if (!data && serviceRunning && apiBaseUrl != null) {
           try {
             const res = await fetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
               signal: AbortSignal.timeout(10000),
@@ -750,7 +749,7 @@ export function SkillManager({
       let installed = false;
 
       // 方式1：服务运行中 → HTTP API 安装（首选，不回退 Tauri 避免 venv 缺失报错）
-      if (serviceRunning && apiBaseUrl) {
+      if (serviceRunning && apiBaseUrl != null) {
         const res = await fetch(`${apiBaseUrl}/api/skills/install`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -772,7 +771,7 @@ export function SkillManager({
       }
 
       // 方式2：服务未运行 → Tauri invoke（本地模式）
-      if (!installed && dataMode !== "remote" && currentWorkspaceId) {
+      if (!installed && IS_TAURI && dataMode !== "remote" && currentWorkspaceId) {
         await invoke<string>("openakita_install_skill", {
           venvDir,
           workspaceId: currentWorkspaceId,
@@ -816,7 +815,7 @@ export function SkillManager({
     try {
       let installed = false;
 
-      if (serviceRunning && apiBaseUrl) {
+      if (serviceRunning && apiBaseUrl != null) {
         const res = await fetch(`${apiBaseUrl}/api/skills/install`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -836,7 +835,7 @@ export function SkillManager({
         } catch { /* reload 失败不阻塞 */ }
       }
 
-      if (!installed && dataMode !== "remote" && currentWorkspaceId) {
+      if (!installed && IS_TAURI && dataMode !== "remote" && currentWorkspaceId) {
         await invoke<string>("openakita_install_skill", {
           venvDir,
           workspaceId: currentWorkspaceId,

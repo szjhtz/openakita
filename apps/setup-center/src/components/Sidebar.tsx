@@ -29,6 +29,7 @@ export type SidebarProps = {
   serviceRunning: boolean;
   onBugReport: () => void;
   onRefreshStatus: () => Promise<void>;
+  isWeb?: boolean;
 };
 
 const stepIcons: Partial<Record<StepId, React.ReactNode>> = {
@@ -51,7 +52,7 @@ export function Sidebar({
   steps, stepId, onStepChange,
   disabledViews, multiAgentEnabled, onToggleMultiAgent,
   desktopVersion, backendVersion, serviceRunning,
-  onBugReport, onRefreshStatus,
+  onBugReport, onRefreshStatus, isWeb,
 }: SidebarProps) {
   const { t } = useTranslation();
 
@@ -208,7 +209,7 @@ export function Sidebar({
           lineHeight: 1.6,
           flexShrink: 0,
         }}>
-          <div>Desktop v{desktopVersion}{import.meta.env.VITE_PREVIEW_BUILD === "true" && <span style={{ marginLeft: 6, color: "#e8a735", fontWeight: 600, opacity: 1 }}>预览版</span>}</div>
+          <div>{isWeb ? "Web" : "Desktop"} v{desktopVersion}{import.meta.env.VITE_PREVIEW_BUILD === "true" && <span style={{ marginLeft: 6, color: "#e8a735", fontWeight: 600, opacity: 1 }}>预览版</span>}</div>
           {backendVersion && <div>Backend v{backendVersion}</div>}
           {!backendVersion && serviceRunning && <div>Backend: -</div>}
           <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 10 }}>

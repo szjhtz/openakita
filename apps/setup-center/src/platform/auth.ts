@@ -1,0 +1,213 @@
+// ─── Web Auth Token Management ───
+// Handles JWT access/refresh token lifecycle for web mode.
+// In Tauri mode, all functions are no-ops (local requests are exempt).
+
+import { IS_WEB } from "./detect";
+
+const ACCESS_TOKEN_KEY = "openakita_access_token";
+
+// ---------------------------------------------------------------------------
+// Token storage
+// ---------------------------------------------------------------------------
+
+export function getAccessToken(): string | null {
+  if (!IS_WEB) return null;
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function setAccessToken(token: string): void {
+  localStorage.setItem(ACCESS_TOKEN_KEY, token);
+}
+
+export function clearAccessToken(): void {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+}
+
+// ---------------------------------------------------------------------------
+// JWT payload parsing (no verification — that's the server's job)
+// ---------------------------------------------------------------------------
+
+function parseJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1];
+    const padded = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+    return JSON.parse(atob(padded.replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    return null;
+  }
+}
+
+export function isTokenExpiringSoon(token: string, thresholdSeconds = 3600): boolean {
+  const payload = parseJwtPayload(token);
+  if (!payload || typeof payload.exp !== "number") return true;
+  return payload.exp - Date.now() / 1000 < thresholdSeconds;
+}
+
+// ---------------------------------------------------------------------------
+// Refresh flow
+// ---------------------------------------------------------------------------
+
+let _refreshPromise: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(apiBase = ""): Promise<string | null> {
+  // Deduplicate concurrent refresh calls
+  if (_refreshPromise) return _refreshPromise;
+
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        clearAccessToken();
+        return null;
+      }
+      const data = await res.json();
+      if (data.access_token) {
+        setAccessToken(data.access_token);
+        return data.access_token as string;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+
+  return _refreshPromise;
+}
+
+// ---------------------------------------------------------------------------
+// Auth-aware fetch wrapper
+// ---------------------------------------------------------------------------
+
+export async function authFetch(
+  url: string,
+  init?: RequestInit,
+  apiBase = "",
+): Promise<Response> {
+  if (!IS_WEB) return fetch(url, init);
+
+  let token = getAccessToken();
+
+  // Attempt silent refresh if token is missing or expiring
+  if (!token || isTokenExpiringSoon(token)) {
+    token = await refreshAccessToken(apiBase);
+  }
+
+  const headers = new Headers(init?.headers);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const res = await fetch(url, { ...init, headers, credentials: "include" });
+
+  // If 401 and we had a token, try one refresh then retry
+  if (res.status === 401 && token) {
+    const newToken = await refreshAccessToken(apiBase);
+    if (newToken) {
+      headers.set("Authorization", `Bearer ${newToken}`);
+      return fetch(url, { ...init, headers, credentials: "include" });
+    }
+  }
+
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// Login / Logout
+// ---------------------------------------------------------------------------
+
+export async function login(
+  password: string,
+  apiBase = "",
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${apiBase}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+      credentials: "include",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ detail: "Login failed" }));
+      return { success: false, error: data.detail || `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    if (data.access_token) {
+      setAccessToken(data.access_token);
+    }
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}
+
+export async function logout(apiBase = ""): Promise<void> {
+  try {
+    await fetch(`${apiBase}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch { /* ignore */ }
+  clearAccessToken();
+}
+
+// ---------------------------------------------------------------------------
+// Global fetch interceptor — auto-adds auth token to same-origin API calls
+// ---------------------------------------------------------------------------
+
+let _interceptorInstalled = false;
+
+export function installFetchInterceptor(): void {
+  if (!IS_WEB || _interceptorInstalled) return;
+  _interceptorInstalled = true;
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    const isSameOrigin = url.startsWith("/") || url.startsWith(window.location.origin);
+
+    if (isSameOrigin) {
+      const token = getAccessToken();
+      if (token) {
+        const headers = new Headers(init?.headers);
+        if (!headers.has("Authorization")) {
+          headers.set("Authorization", `Bearer ${token}`);
+        }
+        init = { ...init, headers };
+      }
+    }
+
+    return originalFetch(input, init);
+  } as typeof fetch;
+}
+
+// ---------------------------------------------------------------------------
+// Auth check
+// ---------------------------------------------------------------------------
+
+export async function checkAuth(apiBase = ""): Promise<boolean> {
+  try {
+    const token = getAccessToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${apiBase}/api/auth/check`, {
+      headers,
+      credentials: "include",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.authenticated === true;
+  } catch {
+    return false;
+  }
+}

@@ -6,8 +6,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { setThemePref } from "../theme";
 import type { Theme } from "../theme";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { invoke, downloadFile, openFileWithDefault, showInFolder, readFileBase64, onDragDrop, IS_TAURI } from "../platform";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -1138,11 +1137,8 @@ function MessageBubble({
                         if (_artifactClickTimer) { clearTimeout(_artifactClickTimer); _artifactClickTimer = null; }
                         (async () => {
                           try {
-                            const savedPath = await invoke<string>("download_file", {
-                              url: fullUrl,
-                              filename: art.name || `image-${Date.now()}.png`,
-                            });
-                            await invoke("open_file_with_default", { path: savedPath });
+                            const savedPath = await downloadFile(fullUrl, art.name || `image-${Date.now()}.png`);
+                            await openFileWithDefault(savedPath);
                           } catch (err) {
                             console.error("图片打开失败:", err);
                           }
@@ -1163,11 +1159,8 @@ function MessageBubble({
                       onClick={async (e) => {
                         e.stopPropagation();
                         try {
-                          const savedPath = await invoke<string>("download_file", {
-                            url: fullUrl,
-                            filename: art.name || `image-${Date.now()}.png`,
-                          });
-                          await invoke("show_item_in_folder", { path: savedPath });
+                          const savedPath = await downloadFile(fullUrl, art.name || `image-${Date.now()}.png`);
+                          await showInFolder(savedPath);
                         } catch (err) {
                           console.error("图片下载失败:", err);
                         }
@@ -1208,11 +1201,8 @@ function MessageBubble({
                       if (_artifactClickTimer) clearTimeout(_artifactClickTimer);
                       _artifactClickTimer = setTimeout(async () => {
                         try {
-                          const savedPath = await invoke<string>("download_file", {
-                            url: fullUrl,
-                            filename: art.name || "file",
-                          });
-                          await invoke("show_item_in_folder", { path: savedPath });
+                          const savedPath = await downloadFile(fullUrl, art.name || "file");
+                          await showInFolder(savedPath);
                         } catch (err) {
                           console.error("文件下载失败:", err);
                         }
@@ -1222,11 +1212,8 @@ function MessageBubble({
                       if (_artifactClickTimer) { clearTimeout(_artifactClickTimer); _artifactClickTimer = null; }
                       (async () => {
                         try {
-                          const savedPath = await invoke<string>("download_file", {
-                            url: fullUrl,
-                            filename: art.name || "file",
-                          });
-                          await invoke("open_file_with_default", { path: savedPath });
+                          const savedPath = await downloadFile(fullUrl, art.name || "file");
+                          await openFileWithDefault(savedPath);
                         } catch (err) {
                           console.error("文件打开失败:", err);
                         }
@@ -1379,11 +1366,8 @@ function FlatMessageItem({
                           if (_artifactClickTimer) { clearTimeout(_artifactClickTimer); _artifactClickTimer = null; }
                           (async () => {
                             try {
-                              const savedPath = await invoke<string>("download_file", {
-                                url: fullUrl,
-                                filename: art.name || `image-${Date.now()}.png`,
-                              });
-                              await invoke("open_file_with_default", { path: savedPath });
+                              const savedPath = await downloadFile(fullUrl, art.name || `image-${Date.now()}.png`);
+                              await openFileWithDefault(savedPath);
                             } catch (err) {
                               console.error("图片打开失败:", err);
                             }
@@ -1404,11 +1388,8 @@ function FlatMessageItem({
                         onClick={async (e) => {
                           e.stopPropagation();
                           try {
-                            const savedPath = await invoke<string>("download_file", {
-                              url: fullUrl,
-                              filename: art.name || `image-${Date.now()}.png`,
-                            });
-                            await invoke("show_item_in_folder", { path: savedPath });
+                            const savedPath = await downloadFile(fullUrl, art.name || `image-${Date.now()}.png`);
+                            await showInFolder(savedPath);
                           } catch (err) {
                             console.error("图片下载失败:", err);
                           }
@@ -1446,11 +1427,8 @@ function FlatMessageItem({
                         if (_artifactClickTimer) clearTimeout(_artifactClickTimer);
                         _artifactClickTimer = setTimeout(async () => {
                           try {
-                            const savedPath = await invoke<string>("download_file", {
-                              url: fullUrl,
-                              filename: art.name || "file",
-                            });
-                            await invoke("show_item_in_folder", { path: savedPath });
+                            const savedPath = await downloadFile(fullUrl, art.name || "file");
+                            await showInFolder(savedPath);
                           } catch (err) {
                             console.error("文件下载失败:", err);
                           }
@@ -1460,11 +1438,8 @@ function FlatMessageItem({
                         if (_artifactClickTimer) { clearTimeout(_artifactClickTimer); _artifactClickTimer = null; }
                         (async () => {
                           try {
-                            const savedPath = await invoke<string>("download_file", {
-                              url: fullUrl,
-                              filename: art.name || "file",
-                            });
-                            await invoke("open_file_with_default", { path: savedPath });
+                            const savedPath = await downloadFile(fullUrl, art.name || "file");
+                            await openFileWithDefault(savedPath);
                           } catch (err) {
                             console.error("文件打开失败:", err);
                           }
@@ -3387,127 +3362,64 @@ export function ChatView({
     }
   }, []);
 
-  // ── 拖拽图片/文件 (Tauri native webview-scoped drag-drop) ──
+  // ── 拖拽图片/文件 (Tauri native or HTML5 drag-drop) ──
   const [dragOver, setDragOver] = useState(false);
   useEffect(() => {
+    if (!IS_TAURI) return; // Web uses HTML5 drag-drop via onDrop on the container
     let cancelled = false;
     let unlisten: (() => void) | null = null;
 
-    (async () => {
-      try {
-        const webview = getCurrentWebview();
-        // onDragDropEvent: official Tauri v2 webview-scoped API
-        unlisten = await webview.onDragDropEvent((event) => {
-          if (cancelled) return;
-          const payload = event.payload as any;
-          console.log("[DragDrop] event:", payload.type, payload);
-          if (payload.type === "over" || payload.type === "enter") {
-            setDragOver(true);
-          } else if (payload.type === "leave" || payload.type === "cancel") {
-            setDragOver(false);
-          } else if (payload.type === "drop") {
-            setDragOver(false);
-            const paths: string[] = payload.paths || [];
-            console.log("[DragDrop] dropped paths:", paths);
-            for (const filePath of paths) {
-              const name = filePath.split(/[\\/]/).pop() || "file";
-              const ext = (name.split(".").pop() || "").toLowerCase();
-              const isImage = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext);
-              const isVideo = ["mp4", "webm", "avi", "mov", "mkv"].includes(ext);
-              const mimeMap: Record<string, string> = {
-                png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-                gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
-                mp4: "video/mp4", webm: "video/webm", avi: "video/x-msvideo",
-                mov: "video/quicktime", mkv: "video/x-matroska",
-                pdf: "application/pdf", txt: "text/plain", md: "text/plain",
-                json: "application/json", csv: "text/csv",
-              };
-              const mimeType = mimeMap[ext] || "application/octet-stream";
-              invoke<string>("read_file_base64", { path: filePath })
-                .then((dataUrl) => {
-                  if (cancelled) return;
-                  if (isVideo) {
-                    const commaIdx = dataUrl.indexOf(",");
-                    const base64Len = commaIdx >= 0 ? dataUrl.length - commaIdx - 1 : dataUrl.length;
-                    const estimatedSize = base64Len * 3 / 4;
-                    const VIDEO_MAX_SIZE = 7 * 1024 * 1024;
-                    if (estimatedSize > VIDEO_MAX_SIZE) {
-                      alert(`视频文件过大 (${(estimatedSize / 1024 / 1024).toFixed(1)}MB)，最大支持 7MB（base64 编码后需 < 10MB）`);
-                      return;
-                    }
-                  }
-                  console.log("[DragDrop] file read OK:", name, dataUrl.length, "bytes");
-                  setPendingAttachments((prev) => [...prev, {
-                    type: isImage ? "image" : isVideo ? "video" : "file",
-                    name,
-                    previewUrl: isImage ? dataUrl : undefined,
-                    url: dataUrl,
-                    mimeType,
-                  }]);
-                })
-                .catch((err) => console.error("[DragDrop] read_file_base64 failed:", name, err));
-            }
-          }
-        });
-        console.log("[DragDrop] listener registered via onDragDropEvent");
-      } catch (e) {
-        console.warn("[DragDrop] onDragDropEvent failed, trying fallback:", e);
-        // Fallback: try webview.listen for individual events
-        try {
-          const webview = getCurrentWebview();
-          const unlisteners: Array<() => void> = [];
-          const u1 = await webview.listen<any>("tauri://drag-enter", () => { if (!cancelled) setDragOver(true); });
-          const u2 = await webview.listen<any>("tauri://drag-over", () => { if (!cancelled) setDragOver(true); });
-          const u3 = await webview.listen<any>("tauri://drag-leave", () => { if (!cancelled) setDragOver(false); });
-          const u4 = await webview.listen<any>("tauri://drag-drop", (ev) => {
+    const mimeMap: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
+      mp4: "video/mp4", webm: "video/webm", avi: "video/x-msvideo",
+      mov: "video/quicktime", mkv: "video/x-matroska",
+      pdf: "application/pdf", txt: "text/plain", md: "text/plain",
+      json: "application/json", csv: "text/csv",
+    };
+
+    const handleDroppedPaths = (paths: string[]) => {
+      for (const filePath of paths) {
+        const name = filePath.split(/[\\/]/).pop() || "file";
+        const ext = (name.split(".").pop() || "").toLowerCase();
+        const isImage = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext);
+        const isVideo = ["mp4", "webm", "avi", "mov", "mkv"].includes(ext);
+        const mimeType = mimeMap[ext] || "application/octet-stream";
+        readFileBase64(filePath)
+          .then((dataUrl) => {
             if (cancelled) return;
-            setDragOver(false);
-            const paths: string[] = ev.payload?.paths || [];
-            console.log("[DragDrop-fallback] dropped paths:", paths);
-            for (const filePath of paths) {
-              const name = filePath.split(/[\\/]/).pop() || "file";
-              const ext = (name.split(".").pop() || "").toLowerCase();
-              const isImage = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext);
-              const isVideo = ["mp4", "webm", "avi", "mov", "mkv"].includes(ext);
-              const videoMimeMap: Record<string, string> = {
-                mp4: "video/mp4", webm: "video/webm", avi: "video/x-msvideo",
-                mov: "video/quicktime", mkv: "video/x-matroska",
-              };
-              invoke<string>("read_file_base64", { path: filePath })
-                .then((dataUrl) => {
-                  if (cancelled) return;
-                  if (isVideo) {
-                    const commaIdx = dataUrl.indexOf(",");
-                    const base64Len = commaIdx >= 0 ? dataUrl.length - commaIdx - 1 : dataUrl.length;
-                    const estimatedSize = base64Len * 3 / 4;
-                    const VIDEO_MAX_SIZE = 7 * 1024 * 1024;
-                    if (estimatedSize > VIDEO_MAX_SIZE) {
-                      alert(`视频文件过大 (${(estimatedSize / 1024 / 1024).toFixed(1)}MB)，最大支持 7MB（base64 编码后需 < 10MB）`);
-                      return;
-                    }
-                  }
-                  const mimeType = isImage ? `image/${ext === "jpg" ? "jpeg" : ext}`
-                    : isVideo ? (videoMimeMap[ext] || "video/mp4")
-                    : "application/octet-stream";
-                  setPendingAttachments((prev) => [...prev, {
-                    type: isImage ? "image" : isVideo ? "video" : "file",
-                    name,
-                    previewUrl: isImage ? dataUrl : undefined,
-                    url: dataUrl,
-                    mimeType,
-                  }]);
-                })
-                .catch((err) => console.error("[DragDrop-fallback] read failed:", err));
+            if (isVideo) {
+              const commaIdx = dataUrl.indexOf(",");
+              const base64Len = commaIdx >= 0 ? dataUrl.length - commaIdx - 1 : dataUrl.length;
+              const estimatedSize = base64Len * 3 / 4;
+              const VIDEO_MAX_SIZE = 7 * 1024 * 1024;
+              if (estimatedSize > VIDEO_MAX_SIZE) {
+                alert(`视频文件过大 (${(estimatedSize / 1024 / 1024).toFixed(1)}MB)，最大支持 7MB（base64 编码后需 < 10MB）`);
+                return;
+              }
             }
-          });
-          unlisteners.push(u1, u2, u3, u4);
-          unlisten = () => unlisteners.forEach((u) => u());
-          console.log("[DragDrop] fallback listeners registered");
-        } catch (e2) {
-          console.error("[DragDrop] all methods failed:", e2);
-        }
+            setPendingAttachments((prev) => [...prev, {
+              type: isImage ? "image" : isVideo ? "video" : "file",
+              name,
+              previewUrl: isImage ? dataUrl : undefined,
+              url: dataUrl,
+              mimeType,
+            }]);
+          })
+          .catch((err) => console.error("[DragDrop] read_file_base64 failed:", name, err));
       }
-    })();
+    };
+
+    onDragDrop({
+      onEnter: () => { if (!cancelled) setDragOver(true); },
+      onOver: () => { if (!cancelled) setDragOver(true); },
+      onLeave: () => { if (!cancelled) setDragOver(false); },
+      onDrop: (paths) => {
+        if (cancelled) return;
+        setDragOver(false);
+        handleDroppedPaths(paths);
+      },
+    }).then((unsub) => { unlisten = unsub; });
 
     return () => {
       cancelled = true;
@@ -4363,11 +4275,8 @@ export function ChatView({
               onClick={async (e) => {
                 e.stopPropagation();
                 try {
-                  const savedPath = await invoke<string>("download_file", {
-                    url: lightbox.url,
-                    filename: lightbox.name || `image-${Date.now()}.png`,
-                  });
-                  await invoke("show_item_in_folder", { path: savedPath });
+                  const savedPath = await downloadFile(lightbox.url, lightbox.name || `image-${Date.now()}.png`);
+                  await showInFolder(savedPath);
                 } catch (err) {
                   console.error("图片下载失败:", err);
                 }

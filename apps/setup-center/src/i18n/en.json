@@ -37,6 +37,7 @@
     "autoStartFail": "Auto-start failed. Please start manually.",
     "startFail": "Service failed to start. Check config.",
     "disconnect": "Disconnect",
+    "logout": "Logout",
     "disconnected": "Disconnected from service",
     "switchWorkspace": "Switch workspace",
     "quickCreateWs": "New workspace",
@@ -1223,6 +1224,37 @@
     "backupNoHistory": "No backups found",
     "backupSaved": "Backup settings saved",
     "backupNoPath": "Please set a backup location first",
-    "backupSize": "Size"
+    "backupSize": "Size",
+    "webPasswordTitle": "Web Access Password",
+    "webPasswordHint": "Required for remote web access. Local access (127.0.0.1) is password-free.",
+    "webPasswordCurrent": "Current hint",
+    "webPasswordNewPlaceholder": "Enter new password",
+    "webPasswordSet": "Set Password",
+    "webPasswordRandomize": "Randomize",
+    "webPasswordChanged": "Web access password changed. All remote sessions invalidated.",
+    "webPasswordReset": "Web access password reset to: {{password}}"
+  },
+  "poster": {
+    "title": "Poster Generator",
+    "exportPng": "Export PNG",
+    "close": "Close",
+    "inviteTitle": "Invite Poster",
+    "inviteSlogan": "Share Agents, Not Just Skills",
+    "scanToJoin": "Scan to join",
+    "achievementTitle": "Achievement Card",
+    "pioneer": "Pioneer",
+    "publishCount": "Published",
+    "downloadCount": "Downloads",
+    "apBalance": "AP Balance",
+    "exported": "Poster exported",
+    "exportFailed": "Export failed, please retry"
+  },
+  "login": {
+    "prompt": "Enter access password to continue",
+    "passwordPlaceholder": "Enter password",
+    "submit": "Login",
+    "loggingIn": "Logging in...",
+    "failed": "Login failed",
+    "hint": "Password is auto-generated on first start. View or reset it in the Desktop Setup Center."
   }
 }

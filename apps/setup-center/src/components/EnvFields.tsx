@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, IS_WEB, IS_TAURI } from "../platform";
 import { IconInfo, IconEye, IconEyeOff } from "../icons";
 import type { EnvMap } from "../types";
 import { envGet, envSet } from "../utils";
@@ -37,10 +37,10 @@ export function FieldText({
           value={envGet(envDraft, k)}
           onChange={(e) => onEnvChange((m) => envSet(m, k, e.target.value))}
           placeholder={placeholder}
-          type={isSecret ? (shown ? "text" : "password") : "text"}
+          type={isSecret ? ((shown && !IS_WEB) ? "text" : "password") : "text"}
           style={isSecret ? { paddingRight: 44 } : undefined}
         />
-        {isSecret && (
+        {isSecret && !IS_WEB && (
           <button type="button" className="btnEye"
             onClick={() => onToggleSecret(k)}
             disabled={!!busy}
@@ -158,7 +158,7 @@ export function TelegramPairingCodeHint({ currentWorkspaceId }: { currentWorkspa
   const [loading, setLoading] = useState(false);
 
   const loadCode = useCallback(async () => {
-    if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId || !IS_TAURI) { setCurrentCode(null); return; }
     setLoading(true);
     try {
       const code = await invoke<string>("workspace_read_file", {

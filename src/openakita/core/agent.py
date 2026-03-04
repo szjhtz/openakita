@@ -782,6 +782,12 @@ class Agent:
         # 初始化 token 用量追踪
         init_token_tracking(str(settings.db_full_path))
 
+        # 自动生成/加载设备 ID（用于平台认证）
+        if not settings.hub_device_id:
+            from openakita.hub.device import get_or_create_device_id
+            data_dir = Path(settings.project_root) / "data"
+            settings.hub_device_id = get_or_create_device_id(data_dir)
+
         # 加载身份文档
         self.identity.load()
 

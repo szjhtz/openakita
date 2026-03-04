@@ -37,12 +37,20 @@ class SkillStoreClient:
         self.base_url = (base_url or settings.hub_api_url).rstrip("/")
         self._client: httpx.AsyncClient | None = None
 
+    def _auth_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"User-Agent": f"OpenAkita/{self._get_version()}"}
+        if settings.hub_api_key:
+            headers["X-Akita-Key"] = settings.hub_api_key
+        if settings.hub_device_id:
+            headers["X-Akita-Device"] = settings.hub_device_id
+        return headers
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=DEFAULT_TIMEOUT,
-                headers={"User-Agent": f"OpenAkita/{self._get_version()}"},
+                headers=self._auth_headers(),
             )
         return self._client
 
