@@ -69,7 +69,7 @@ export type BundledPythonInstallResult = {
 };
 
 export type PythonContractStatus = "pass" | "warn" | "fail";
-export type PythonSummaryStatus = "healthy" | "broken";
+export type PythonSummaryStatus = "healthy" | "repairable" | "broken";
 
 export type PythonContractResult = {
   id: string;
