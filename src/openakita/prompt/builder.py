@@ -15,6 +15,7 @@ Prompt Builder - 消息组装模块
 import logging
 import os
 import platform
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -82,6 +83,63 @@ _DEFAULT_USER_POLICIES = """\
 ## 输出格式
 **任务型回复**：已执行 → 发现 → 下一步（如有）
 **陪伴型回复**：自然对话，符合当前角色风格"""
+
+
+# ---------------------------------------------------------------------------
+# AGENTS.md — 项目级开发规范（行业标准，https://agents.md）
+# 从当前工作目录向上查找，自动注入系统提示词。
+# 非代码项目不会有此文件，读取逻辑静默跳过。
+# ---------------------------------------------------------------------------
+_agents_md_cache: dict[str, tuple[float, str | None]] = {}
+_AGENTS_MD_CACHE_TTL = 60.0
+_AGENTS_MD_MAX_CHARS = 8000
+_AGENTS_MD_MAX_DEPTH = 3
+
+
+def _read_agents_md(
+    cwd: str | None = None,
+    *,
+    max_depth: int = _AGENTS_MD_MAX_DEPTH,
+    max_chars: int = _AGENTS_MD_MAX_CHARS,
+) -> str | None:
+    """Read AGENTS.md from *cwd* or its parent directories.
+
+    Uses a simple TTL cache to avoid repeated disk I/O on every prompt build.
+    Returns the file content (truncated to *max_chars*) or ``None``.
+    """
+    if cwd is None:
+        cwd = os.getcwd()
+
+    now = time.monotonic()
+    cached = _agents_md_cache.get(cwd)
+    if cached is not None:
+        ts, content = cached
+        if now - ts < _AGENTS_MD_CACHE_TTL:
+            return content
+
+    content = _find_agents_md(cwd, max_depth=max_depth, max_chars=max_chars)
+    _agents_md_cache[cwd] = (now, content)
+    return content
+
+
+def _find_agents_md(cwd: str, *, max_depth: int, max_chars: int) -> str | None:
+    """Walk up from *cwd* looking for an AGENTS.md file."""
+    current = Path(cwd).resolve()
+    for _ in range(max_depth):
+        agents_file = current / "AGENTS.md"
+        if agents_file.is_file():
+            try:
+                raw = agents_file.read_text(encoding="utf-8", errors="ignore")
+                content = raw[:max_chars] if len(raw) > max_chars else raw
+                logger.info("Loaded project AGENTS.md from %s (%d chars)", agents_file, len(content))
+                return content.strip() or None
+            except OSError:
+                return None
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
 
 
 def build_system_prompt(
@@ -157,6 +215,15 @@ def build_system_prompt(
     session_rules = _build_session_type_rules(session_type, persona_active=persona_active)
     if session_rules:
         developer_parts.append(session_rules)
+
+    # 3.6 注入项目 AGENTS.md（行业标准，仅代码项目会有此文件）
+    agents_md_content = _read_agents_md()
+    if agents_md_content:
+        developer_parts.append(
+            "## Project Guidelines (AGENTS.md)\n\n"
+            "以下是当前工作目录中的项目开发规范，执行开发任务时必须遵循：\n\n"
+            + agents_md_content
+        )
 
     # 4. 构建 Catalogs 层
     catalogs_section = _build_catalogs_section(
