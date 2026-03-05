@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { setThemePref } from "../theme";
 import type { Theme } from "../theme";
 import { invoke, downloadFile, openFileWithDefault, showInFolder, readFileBase64, onDragDrop, IS_TAURI, IS_WEB, onWsEvent } from "../platform";
+import { getAccessToken } from "../platform/auth";
 import { safeFetch } from "../providers";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -43,6 +44,14 @@ import {
 } from "../icons";
 
 let _artifactClickTimer: ReturnType<typeof setTimeout> | null = null;
+
+function appendAuthToken(url: string): string {
+  if (IS_TAURI) return url;
+  const token = getAccessToken();
+  if (!token) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
+}
 
 /** Strip legacy inline execution summaries from assistant message content */
 function stripLegacySummary(content: string): string {
@@ -1133,9 +1142,10 @@ function MessageBubble({
         {msg.artifacts && msg.artifacts.length > 0 && (
           <div style={{ marginTop: 8 }}>
             {msg.artifacts.map((art, i) => {
-              const fullUrl = art.file_url.startsWith("http")
+              const rawUrl = art.file_url.startsWith("http")
                 ? art.file_url
                 : `${apiBaseUrl || ""}${art.file_url}`;
+              const fullUrl = appendAuthToken(rawUrl);
               if (art.artifact_type === "image") {
                 return (
                   <div key={i} style={{ marginBottom: 8, position: "relative", display: "inline-block" }}>
@@ -1369,9 +1379,10 @@ function FlatMessageItem({
           {msg.artifacts && msg.artifacts.length > 0 && (
             <div style={{ marginTop: 8 }}>
               {msg.artifacts.map((art, i) => {
-                const fullUrl = art.file_url.startsWith("http")
+                const rawUrl = art.file_url.startsWith("http")
                   ? art.file_url
                   : `${apiBaseUrl || ""}${art.file_url}`;
+                const fullUrl = appendAuthToken(rawUrl);
                 if (art.artifact_type === "image") {
                   return (
                     <div key={i} style={{ marginBottom: 8, position: "relative", display: "inline-block" }}>

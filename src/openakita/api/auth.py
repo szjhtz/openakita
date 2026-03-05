@@ -359,6 +359,11 @@ def create_auth_middleware(config: WebAccessConfig):
             if config.validate_access_token(token):
                 return await call_next(request)
 
+        # Check query parameter token (for <img> / <audio> tags that can't set headers)
+        query_token = request.query_params.get("token", "")
+        if query_token and config.validate_access_token(query_token):
+            return await call_next(request)
+
         # Check X-API-Key header (for programmatic access)
         api_key = request.headers.get("x-api-key", "")
         if api_key and config.verify_password(api_key):
