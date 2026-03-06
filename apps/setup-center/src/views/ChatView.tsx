@@ -7,9 +7,6 @@ import { setThemePref } from "../theme";
 import type { Theme } from "../theme";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
 import type {
   ChatMessage,
   ChatConversation,
@@ -38,6 +35,48 @@ import {
   IconMask, IconBot, IconUsers, IconHelp, IconEdit, IconDownload,
   IconPin,
 } from "../icons";
+
+// ─── Markdown 渲染库延迟加载 ───
+// react-markdown v10 及其依赖使用 \p{ID_Start} Unicode 属性转义和 (?<=...) 后行断言，
+// 旧版 WebKit (macOS < 13.3) 不支持这些正则语法，会导致 JS 引擎 SyntaxError。
+// 通过运行时特性检测 + 动态 import() 实现：
+//   - 支持的浏览器：加载完整 markdown 渲染
+//   - 不支持的浏览器：回退为纯文本，app 正常运行
+type MdModules = {
+  ReactMarkdown: typeof import("react-markdown").default;
+  remarkGfm: typeof import("remark-gfm").default;
+  rehypeHighlight: typeof import("rehype-highlight").default;
+};
+let _mdModules: MdModules | null = null;
+let _mdLoadAttempted = false;
+
+function useMdModules(): MdModules | null {
+  const [mods, setMods] = useState<MdModules | null>(() => _mdModules);
+  useEffect(() => {
+    if (_mdModules) { setMods(_mdModules); return; }
+    if (_mdLoadAttempted) return;
+    _mdLoadAttempted = true;
+    try {
+      new RegExp("\\p{ID_Start}", "u");
+      new RegExp("(?<=a)b");
+    } catch { return; }
+    Promise.all([
+      import("react-markdown"),
+      import("remark-gfm"),
+      import("rehype-highlight"),
+    ]).then(([md, gfm, hl]) => {
+      _mdModules = {
+        ReactMarkdown: md.default,
+        remarkGfm: gfm.default,
+        rehypeHighlight: hl.default,
+      };
+      setMods(_mdModules);
+    }).catch((err) => {
+      console.warn("[ChatView] markdown modules unavailable:", err);
+    });
+  }, []);
+  return mods;
+}
 
 let _artifactClickTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1030,6 +1069,7 @@ function MessageBubble({
   showChain = true,
   onSkipStep,
   onImagePreview,
+  mdModules,
 }: {
   msg: ChatMessage;
   onAskAnswer?: (msgId: string, answer: string) => void;
@@ -1037,6 +1077,7 @@ function MessageBubble({
   showChain?: boolean;
   onSkipStep?: () => void;
   onImagePreview?: (url: string, name: string) => void;
+  mdModules?: MdModules | null;
 }) {
   const { t } = useTranslation();
   const isUser = msg.role === "user";
@@ -1084,9 +1125,13 @@ function MessageBubble({
         {/* Main content (markdown) */}
         {msg.content && (
           <div className={isUser ? "chatMdContent chatMdContentUser" : "chatMdContent"}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {msg.content}
-            </ReactMarkdown>
+            {mdModules ? (
+              <mdModules.ReactMarkdown remarkPlugins={[mdModules.remarkGfm]} rehypePlugins={[mdModules.rehypeHighlight]}>
+                {msg.content}
+              </mdModules.ReactMarkdown>
+            ) : (
+              <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit" }}>{msg.content}</pre>
+            )}
           </div>
         )}
 
@@ -1267,6 +1312,7 @@ function FlatMessageItem({
   showChain = true,
   onSkipStep,
   onImagePreview,
+  mdModules,
 }: {
   msg: ChatMessage;
   onAskAnswer?: (msgId: string, answer: string) => void;
@@ -1274,6 +1320,7 @@ function FlatMessageItem({
   showChain?: boolean;
   onSkipStep?: () => void;
   onImagePreview?: (url: string, name: string) => void;
+  mdModules?: MdModules | null;
 }) {
   const { t } = useTranslation();
   const isUser = msg.role === "user";
@@ -1335,9 +1382,13 @@ function FlatMessageItem({
           {/* Main content (markdown) */}
           {msg.content && (
             <div className="chatMdContent">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                {msg.content}
-              </ReactMarkdown>
+              {mdModules ? (
+                <mdModules.ReactMarkdown remarkPlugins={[mdModules.remarkGfm]} rehypePlugins={[mdModules.rehypeHighlight]}>
+                  {msg.content}
+                </mdModules.ReactMarkdown>
+              ) : (
+                <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit" }}>{msg.content}</pre>
+              )}
             </div>
           )}
 
@@ -1451,6 +1502,7 @@ export function ChatView({
   visible?: boolean;
 }) {
   const { t, i18n } = useTranslation();
+  const mdModules = useMdModules();
 
   // ── 持久化 Key 常量 ──
   const STORAGE_KEY_CONVS = "chat_conversations";
@@ -3343,9 +3395,9 @@ export function ChatView({
           )}
           {messages.map((msg) =>
             displayMode === "flat" ? (
-              <FlatMessageItem key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} />
+              <FlatMessageItem key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} mdModules={mdModules} />
             ) : (
-              <MessageBubble key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} />
+              <MessageBubble key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} mdModules={mdModules} />
             )
           )}
           <div ref={messagesEndRef} />
