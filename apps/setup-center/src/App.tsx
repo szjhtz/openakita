@@ -1998,16 +1998,54 @@ export function App() {
 
       // Step 3: 触发重启
       setRestartOverlay({ phase: "restarting" });
-      try {
-        await fetch(`${base}/api/config/restart`, { method: "POST", signal: AbortSignal.timeout(3000) });
-      } catch { /* 请求可能因服务关闭而失败，这是预期的 */ }
+      const wsId = currentWorkspaceId || workspaces[0]?.id;
 
-      // Step 4: 等待服务关闭（轮询端口不可达，而非固定延时）
-      await waitForServiceDown(base, 15000);
+      if (IS_TAURI && wsId && venvDir && dataMode === "local") {
+        // ── Tauri 本地模式：进程级重启（杀旧进程 → 启新进程） ──
+        // 比 Python 进程内重启更可靠，不受 Windows asyncio / 端口 TIME_WAIT 影响。
 
-      // Step 5: 轮询等待服务恢复
+        // 3a. 优雅关闭服务
+        try {
+          const shutRes = await fetch(`${base}/api/shutdown`, { method: "POST", signal: AbortSignal.timeout(2000) });
+          if (shutRes.ok) await new Promise((r) => setTimeout(r, 1000));
+        } catch { /* 请求可能因服务关闭而失败 */ }
+
+        // 3b. PID 级别兜底确保进程退出
+        try {
+          await invoke("openakita_service_stop", { workspaceId: wsId });
+        } catch { /* PID 文件可能不存在 */ }
+
+        // 3c. 等待旧服务完全关闭
+        await waitForServiceDown(base, 15000);
+
+        // 3d. 启动新进程
+        setRestartOverlay({ phase: "waiting" });
+        try {
+          const ss = await invoke<{ running: boolean; pid: number | null; pidFile: string }>(
+            "openakita_service_start", { venvDir, workspaceId: wsId },
+          );
+          setServiceStatus(ss);
+        } catch (e) {
+          setRestartOverlay({ phase: "fail" });
+          setTimeout(() => {
+            setRestartOverlay(null);
+            setError(t("config.restartFail") + ": " + String(e));
+          }, 2500);
+          return;
+        }
+      } else {
+        // ── Web / Capacitor 模式：进程内重启（唯一可用方式） ──
+        try {
+          await fetch(`${base}/api/config/restart`, { method: "POST", signal: AbortSignal.timeout(3000) });
+        } catch { /* 请求可能因服务关闭而失败 */ }
+
+        // 等待服务关闭
+        await waitForServiceDown(base, 15000);
+      }
+
+      // Step 4: 轮询等待服务恢复
       setRestartOverlay({ phase: "waiting" });
-      const maxWait = 30_000; // 最多等 30 秒
+      const maxWait = IS_TAURI ? 60_000 : 30_000;
       const pollInterval = 1000;
       const startTime = Date.now();
       let recovered = false;
@@ -2018,7 +2056,6 @@ export function App() {
           const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) });
           if (res.ok) {
             recovered = true;
-            // 更新后端版本
             try {
               const data = await res.json();
               if (data.version) setBackendVersion(data.version);
@@ -2033,9 +2070,7 @@ export function App() {
         setServiceStatus((prev) =>
           prev ? { ...prev, running: true } : { running: true, pid: null, pidFile: "" }
         );
-        // 刷新配置数据
         try { await refreshStatus(undefined, undefined, true); } catch { /* ignore */ }
-        // 重启后重新检测端点健康状态
         autoCheckEndpoints(apiBaseUrl);
         setTimeout(() => {
           setRestartOverlay(null);
