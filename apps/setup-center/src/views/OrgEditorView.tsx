@@ -51,6 +51,8 @@ import {
   IconBuilding,
   IconClipboard,
   IconMenu,
+  IconSitemap,
+  IconAlertCircle,
 } from "../icons";
 import { safeFetch } from "../providers";
 import { openPopupWindow, canOpenPopupWindow, IS_CAPACITOR } from "../platform";
@@ -474,6 +476,7 @@ export function OrgEditorView({
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [currentOrg, setCurrentOrg] = useState<OrgFull | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -486,10 +489,18 @@ export function OrgEditorView({
   const [inboxOpen, setInboxOpen] = useState(false);
   const [nodeEvents, setNodeEvents] = useState<any[]>([]);
   const [nodeSchedules, setNodeSchedules] = useState<any[]>([]);
+  const [toast, setToast] = useState<{ message: string; type: "ok" | "error" } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // React Flow state
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([] as Edge[]);
+
+  const showToast = useCallback((message: string, type: "ok" | "error" = "ok") => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, type });
+    toastTimer.current = setTimeout(() => setToast(null), 3000);
+  }, []);
 
   // MCP/Skill lists for selection
   const [availableMcpServers, setAvailableMcpServers] = useState<{ name: string; status: string }[]>([]);
@@ -513,7 +524,7 @@ export function OrgEditorView({
   const [newNodeDept, setNewNodeDept] = useState("");
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768 || IS_CAPACITOR);
   const [showLeftPanel, setShowLeftPanel] = useState(() => !(window.innerWidth < 768 || IS_CAPACITOR));
-  const [showRightPanel, setShowRightPanel] = useState(true);
+  const [showRightPanel, setShowRightPanel] = useState(false);
 
   useLayoutEffect(() => {
     let prev = window.innerWidth < 768 || IS_CAPACITOR;
@@ -688,7 +699,7 @@ export function OrgEditorView({
         priority: (e.data as any)?.priority ?? 0,
         bandwidth_limit: (e.data as any)?.bandwidth_limit ?? 60,
       }));
-      await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}`, {
+      const resp = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -703,9 +714,12 @@ export function OrgEditorView({
           edges: updatedEdges,
         }),
       });
+      if (!resp.ok) throw new Error(`保存失败 (${resp.status})`);
+      showToast("保存成功", "ok");
       fetchOrgList();
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to save org:", e);
+      showToast(e.message || "保存失败", "error");
     } finally {
       setSaving(false);
     }
@@ -814,15 +828,16 @@ export function OrgEditorView({
 
   const onConnect: OnConnect = useCallback(
     (params: Connection) => {
+      const edgeId = `edge_${Date.now().toString(36)}`;
       const newEdge: Edge = {
-        id: `edge_${Date.now().toString(36)}`,
+        id: edgeId,
         source: params.source!,
         target: params.target!,
         type: "default",
         style: { stroke: EDGE_COLORS.hierarchy, strokeWidth: 2 },
         markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS.hierarchy },
         data: {
-          id: `edge_${Date.now().toString(36)}`,
+          id: edgeId,
           source: params.source,
           target: params.target,
           edge_type: "hierarchy",
@@ -841,12 +856,21 @@ export function OrgEditorView({
 
   const onNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
     setPropsTab(liveMode ? "live" : "basic");
     setFullPromptPreview(null);
+    setShowRightPanel(true);
   }, [liveMode]);
+
+  const onEdgeClick = useCallback((_: any, edge: Edge) => {
+    setSelectedEdgeId(edge.id);
+    setSelectedNodeId(null);
+    setShowRightPanel(true);
+  }, []);
 
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
   }, []);
 
   // ── Fetch node detail when selected in live mode ──
@@ -890,12 +914,232 @@ export function OrgEditorView({
     );
   }, [selectedNodeId, setNodes]);
 
+  // ── Selected edge data ──
+
+  const selectedEdge = useMemo(() => {
+    if (!selectedEdgeId) return null;
+    const e = edges.find((e) => e.id === selectedEdgeId);
+    if (!e) return null;
+    return { ...((e.data as any) || {}), source: e.source, target: e.target, _id: e.id };
+  }, [selectedEdgeId, edges]);
+
+  const updateEdgeData = useCallback((field: string, value: any) => {
+    if (!selectedEdgeId) return;
+    setEdges((prev) =>
+      prev.map((e) => {
+        if (e.id !== selectedEdgeId) return e;
+        const newData = { ...e.data, [field]: value };
+        const edgeType = field === "edge_type" ? value : (e.data as any)?.edge_type;
+        return {
+          ...e,
+          data: newData,
+          style: { stroke: EDGE_COLORS[edgeType] || "var(--muted)", strokeWidth: edgeType === "hierarchy" ? 2 : 1.5 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLORS[edgeType] || "var(--muted)" },
+          animated: edgeType === "collaborate",
+          label: field === "label" ? value : (e.data as any)?.label || undefined,
+        };
+      }),
+    );
+  }, [selectedEdgeId, setEdges]);
+
+  const handleDeleteEdge = useCallback(() => {
+    if (!selectedEdgeId) return;
+    setEdges((prev) => prev.filter((e) => e.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+  }, [selectedEdgeId, setEdges]);
+
   // ── Render ──
 
   if (!visible) return null;
 
   return (
-    <div style={{ display: "flex", height: "100%", overflow: "hidden", position: "relative" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* ── Toolbar - full width ── */}
+      {currentOrg && (
+        <div
+          style={{
+            height: 44,
+            borderBottom: "1px solid var(--line)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 12px",
+            background: "var(--bg-app)",
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              className="btnSmall"
+              onClick={() => setShowLeftPanel(!showLeftPanel)}
+              title="组织列表"
+              style={{ fontSize: 14, minWidth: 32, minHeight: 32 }}
+            >
+              <IconMenu size={14} />
+            </button>
+            <IconBuilding size={16} />
+            {!isMobile && (
+            <input
+              style={{
+                border: "none",
+                background: "transparent",
+                fontWeight: 600,
+                fontSize: 14,
+                outline: "none",
+                width: 160,
+                color: "var(--text)",
+              }}
+              value={currentOrg.name}
+              onChange={(e) => setCurrentOrg({ ...currentOrg, name: e.target.value })}
+            />
+            )}
+            <span
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 4,
+                background: `${STATUS_COLORS[currentOrg.status] || "var(--muted)"}20`,
+                color: STATUS_COLORS[currentOrg.status] || "var(--muted)",
+                fontWeight: 600,
+              }}
+            >
+              {currentOrg.status}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", gap: isMobile ? 4 : 6, alignItems: "center", flexShrink: 1 }}>
+            <button
+              className="btnSmall"
+              onClick={() => setShowNewNodeForm(true)}
+              title="添加节点"
+              style={{ minHeight: 36, whiteSpace: "nowrap" }}
+            >
+              <IconPlus size={12} /> {!isMobile && "添加节点"}
+            </button>
+            {selectedNodeId && (
+              <button className="btnSmall" onClick={handleDeleteNode} title="删除选中节点" style={{ color: "var(--danger)", minHeight: 36 }}>
+                <IconTrash size={12} /> {!isMobile && "删除节点"}
+              </button>
+            )}
+            <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+            {currentOrg.status === "archived" ? (
+              <span style={{ fontSize: 11, color: "var(--muted)", padding: "4px 8px" }}>已归档</span>
+            ) : currentOrg.status === "dormant" ? (
+              <button className="btnSmall" onClick={handleStartOrg} style={{ color: "var(--ok)" }}>
+                <IconPlay size={12} /> 启动
+              </button>
+            ) : (
+              <button className="btnSmall" onClick={handleStopOrg} style={{ color: "var(--danger)" }}>
+                <IconStop size={12} /> 停止
+              </button>
+            )}
+            <button
+              className="btnSmall"
+              onClick={() => setLiveMode(!liveMode)}
+              style={{
+                fontWeight: liveMode ? 600 : 400,
+                color: liveMode ? "var(--primary)" : undefined,
+                background: liveMode ? "rgba(14,165,233,0.1)" : undefined,
+              }}
+            >
+              <IconRadar size={12} /> {!isMobile && "实况"}
+            </button>
+            <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+            <button
+              className="btnSmall"
+              onClick={handleSave}
+              disabled={saving}
+              style={{ fontWeight: 600 }}
+            >
+              <IconSave size={12} /> {saving ? "保存中..." : (!isMobile && "保存")}
+            </button>
+            <button
+              className="btnSmall"
+              title="自动布局"
+              onClick={() => {
+                const laid = computeTreeLayout(nodes, edges);
+                setNodes(laid);
+              }}
+            >
+              <IconSitemap size={12} /> {!isMobile && "布局"}
+            </button>
+            {liveMode && currentOrg && (
+              <>
+                <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+                <button
+                  className="btnSmall"
+                  onClick={async () => {
+                    try {
+                      const resp = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/heartbeat/trigger`, { method: "POST" });
+                      if (!resp.ok) console.error("heartbeat trigger failed:", resp.status);
+                    } catch (e) { console.error("heartbeat trigger error:", e); }
+                  }}
+                  title="手动触发心跳"
+                >
+                  <IconHeartPulse size={12} /> {!isMobile && "心跳"}
+                </button>
+                <button
+                  className="btnSmall"
+                  onClick={async () => {
+                    try {
+                      const resp = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/standup/trigger`, { method: "POST" });
+                      if (!resp.ok) console.error("standup trigger failed:", resp.status);
+                    } catch (e) { console.error("standup trigger error:", e); }
+                  }}
+                  title="手动触发晨会"
+                >
+                  <IconSun size={12} /> {!isMobile && "晨会"}
+                </button>
+              </>
+            )}
+            <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+            <button
+              className="btnSmall"
+              onClick={() => setInboxOpen(!inboxOpen)}
+              style={{
+                fontWeight: inboxOpen ? 600 : 400,
+                color: inboxOpen ? "var(--primary)" : undefined,
+                background: inboxOpen ? "rgba(14,165,233,0.1)" : undefined,
+              }}
+            >
+              <IconInbox size={12} /> {!isMobile && "消息"}
+            </button>
+            {!isMobile && (
+              <button
+                className="btnSmall"
+                onClick={() => setShowRightPanel(!showRightPanel)}
+                title={showRightPanel ? "收起设置面板" : "展开设置面板"}
+                style={{
+                  fontWeight: showRightPanel ? 600 : 400,
+                  color: showRightPanel ? "var(--primary)" : undefined,
+                  background: showRightPanel ? "rgba(14,165,233,0.1)" : undefined,
+                }}
+              >
+                <IconLayoutGrid size={12} /> {selectedNode || selectedEdge ? "属性" : "设置"}
+              </button>
+            )}
+            {canOpenPopupWindow() && (
+            <button
+              className="btnSmall"
+              onClick={() => {
+                const base = window.location.href.split("#")[0].split("?")[0];
+                openPopupWindow(
+                  `${base}#/org-editor`,
+                  "org-editor-popup",
+                  { width: 1400, height: 900, title: "组织编排" },
+                );
+              }}
+              title="在独立窗口中打开"
+            >
+              <IconMaximize2 size={12} />
+            </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Content area: Left + Canvas + Right ── */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden", position: "relative" }}>
       {/* ── Left Panel: Org List ── */}
       {isMobile && showLeftPanel && (
         <div
@@ -1041,183 +1285,6 @@ export function OrgEditorView({
 
       {/* ── Center: Canvas ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {/* Toolbar */}
-        {currentOrg && (
-          <div
-            style={{
-              height: 44,
-              borderBottom: "1px solid var(--line)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "0 12px",
-              background: "var(--bg-app)",
-              flexShrink: 0,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button
-                className="btnSmall"
-                onClick={() => setShowLeftPanel(!showLeftPanel)}
-                title="组织列表"
-                style={{ fontSize: 14, minWidth: 32, minHeight: 32 }}
-              >
-                <IconMenu size={14} />
-              </button>
-              <IconBuilding size={16} />
-              {!isMobile && (
-              <input
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  fontWeight: 600,
-                  fontSize: 14,
-                  outline: "none",
-                  width: 200,
-                  color: "var(--text)",
-                }}
-                value={currentOrg.name}
-                onChange={(e) => setCurrentOrg({ ...currentOrg, name: e.target.value })}
-              />
-              )}
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: "2px 6px",
-                  borderRadius: 4,
-                  background: `${STATUS_COLORS[currentOrg.status] || "var(--muted)"}20`,
-                  color: STATUS_COLORS[currentOrg.status] || "var(--muted)",
-                  fontWeight: 600,
-                }}
-              >
-                {currentOrg.status}
-              </span>
-            </div>
-
-            <div style={{ display: "flex", gap: isMobile ? 4 : 6, alignItems: "center", overflowX: "auto", flexShrink: 1 }}>
-              <button
-                className="btnSmall"
-                onClick={() => setShowNewNodeForm(true)}
-                title="添加节点"
-                style={{ minHeight: 36, whiteSpace: "nowrap" }}
-              >
-                <IconPlus size={12} /> {!isMobile && "添加节点"}
-              </button>
-              {selectedNodeId && (
-                <button className="btnSmall" onClick={handleDeleteNode} title="删除选中节点" style={{ color: "var(--danger)", minHeight: 36 }}>
-                  <IconTrash size={12} /> {!isMobile && "删除节点"}
-                </button>
-              )}
-              <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-              {currentOrg.status === "archived" ? (
-                <span style={{ fontSize: 11, color: "var(--muted)", padding: "4px 8px" }}>已归档</span>
-              ) : currentOrg.status === "dormant" ? (
-                <button className="btnSmall" onClick={handleStartOrg} style={{ color: "var(--ok)" }}>
-                  <IconPlay size={12} /> 启动
-                </button>
-              ) : (
-                <button className="btnSmall" onClick={handleStopOrg} style={{ color: "var(--danger)" }}>
-                  <IconStop size={12} /> 停止
-                </button>
-              )}
-              <button
-                className="btnSmall"
-                onClick={() => setLiveMode(!liveMode)}
-                style={{
-                  fontWeight: liveMode ? 600 : 400,
-                  color: liveMode ? "var(--primary)" : undefined,
-                  background: liveMode ? "rgba(14,165,233,0.1)" : undefined,
-                }}
-              >
-                <IconRadar size={12} /> {!isMobile && "实况"}
-              </button>
-              <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-              <button
-                className="btnSmall"
-                onClick={handleSave}
-                disabled={saving}
-                style={{ fontWeight: 600 }}
-              >
-                <IconSave size={12} /> {saving ? "保存中..." : (!isMobile && "保存")}
-              </button>
-              {liveMode && currentOrg && (
-                <>
-                  <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-                  <button
-                    className="btnSmall"
-                    onClick={async () => {
-                      try {
-                        const resp = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/heartbeat/trigger`, { method: "POST" });
-                        if (!resp.ok) console.error("heartbeat trigger failed:", resp.status);
-                      } catch (e) { console.error("heartbeat trigger error:", e); }
-                    }}
-                    title="手动触发心跳"
-                  >
-                    <IconHeartPulse size={12} /> {!isMobile && "心跳"}
-                  </button>
-                  <button
-                    className="btnSmall"
-                    onClick={async () => {
-                      try {
-                        const resp = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/standup/trigger`, { method: "POST" });
-                        if (!resp.ok) console.error("standup trigger failed:", resp.status);
-                      } catch (e) { console.error("standup trigger error:", e); }
-                    }}
-                    title="手动触发晨会"
-                  >
-                    <IconSun size={12} /> {!isMobile && "晨会"}
-                  </button>
-                </>
-              )}
-              <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-              <button
-                className="btnSmall"
-                onClick={() => setInboxOpen(!inboxOpen)}
-                style={{
-                  fontWeight: inboxOpen ? 600 : 400,
-                  color: inboxOpen ? "var(--primary)" : undefined,
-                  background: inboxOpen ? "rgba(14,165,233,0.1)" : undefined,
-                }}
-              >
-                <IconInbox size={12} /> {!isMobile && "消息"}
-              </button>
-              {canOpenPopupWindow() && (
-              <button
-                className="btnSmall"
-                onClick={() => {
-                  const base = window.location.href.split("#")[0].split("?")[0];
-                  openPopupWindow(
-                    `${base}#/org-editor`,
-                    "org-editor-popup",
-                    { width: 1400, height: 900, title: "组织编排" },
-                  );
-                }}
-                title="在独立窗口中打开"
-              >
-                <IconMaximize2 size={12} />
-              </button>
-              )}
-              {!isMobile && (
-                <>
-                  <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-                  <button
-                    className="btnSmall"
-                    onClick={() => setShowRightPanel(!showRightPanel)}
-                    title={showRightPanel ? "收起设置面板" : "展开设置面板"}
-                    style={{
-                      fontWeight: showRightPanel ? 600 : 400,
-                      color: showRightPanel ? "var(--primary)" : undefined,
-                      background: showRightPanel ? "rgba(14,165,233,0.1)" : undefined,
-                    }}
-                  >
-                    <IconChevronRight size={12} style={{ transform: showRightPanel ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.15s" }} />
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Add node dialog */}
         {showNewNodeForm && (
           <div
@@ -1266,6 +1333,7 @@ export function OrgEditorView({
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
               onPaneClick={onPaneClick}
               nodeTypes={nodeTypes}
               fitView
@@ -2146,8 +2214,138 @@ export function OrgEditorView({
         </div>
       )}
 
-      {/* ── Right Panel: Org Settings (when no node selected) ── */}
-      {currentOrg && !selectedNode && !isMobile && showRightPanel && (
+      {/* ── Right Panel: Edge Properties ── */}
+      {selectedEdge && !selectedNode && showRightPanel && (
+        <div
+          style={{
+            width: isMobile ? "85%" : 280,
+            maxWidth: isMobile ? 360 : 280,
+            borderLeft: isMobile ? "none" : "1px solid var(--line)",
+            overflowY: "auto",
+            background: "var(--bg-app)",
+            flexShrink: 0,
+            padding: 12,
+            position: isMobile ? "absolute" : "relative",
+            zIndex: isMobile ? 50 : "auto",
+            right: 0, top: 0, bottom: 0,
+            boxShadow: isMobile ? "-4px 0 12px rgba(0,0,0,0.15)" : "none",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>连线属性</div>
+            <button className="btnSmall" onClick={() => setSelectedEdgeId(null)} style={{ fontSize: 10 }}>
+              <IconX size={12} />
+            </button>
+          </div>
+
+          {/* Source / Target */}
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
+            <div>起点: <strong style={{ color: "var(--text)" }}>{(() => { const n = nodes.find(n => n.id === selectedEdge.source); return (n?.data as any)?.role_title || selectedEdge.source; })()}</strong></div>
+            <div>终点: <strong style={{ color: "var(--text)" }}>{(() => { const n = nodes.find(n => n.id === selectedEdge.target); return (n?.data as any)?.role_title || selectedEdge.target; })()}</strong></div>
+          </div>
+
+          {/* Edge type */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>连线类型</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {([
+                { key: "hierarchy", label: "上下级", color: EDGE_COLORS.hierarchy },
+                { key: "collaborate", label: "协作", color: EDGE_COLORS.collaborate },
+                { key: "escalate", label: "上报", color: EDGE_COLORS.escalate },
+                { key: "consult", label: "咨询", color: EDGE_COLORS.consult || "var(--muted)" },
+              ] as const).map((t) => (
+                <button
+                  key={t.key}
+                  className="btnSmall"
+                  style={{
+                    fontSize: 11, padding: "3px 8px",
+                    background: selectedEdge.edge_type === t.key ? `${t.color}20` : undefined,
+                    color: selectedEdge.edge_type === t.key ? t.color : "var(--muted)",
+                    borderColor: selectedEdge.edge_type === t.key ? t.color : undefined,
+                    fontWeight: selectedEdge.edge_type === t.key ? 600 : 400,
+                  }}
+                  onClick={() => updateEdgeData("edge_type", t.key)}
+                >
+                  <span style={{ display: "inline-block", width: 10, height: 2, background: t.color, borderRadius: 1, marginRight: 4 }} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Label */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>标签</div>
+            <input
+              style={{
+                width: "100%", padding: "4px 8px", fontSize: 12,
+                border: "1px solid var(--line)", borderRadius: 4,
+                background: "var(--bg-card, #fff)", color: "var(--text)",
+              }}
+              placeholder="可选，如「技术指导」「审批」"
+              value={selectedEdge.label || ""}
+              onChange={(e) => updateEdgeData("label", e.target.value)}
+            />
+          </div>
+
+          {/* Bidirectional */}
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={selectedEdge.bidirectional ?? true}
+                onChange={(e) => updateEdgeData("bidirectional", e.target.checked)}
+              />
+              <span style={{ fontWeight: 500 }}>双向通信</span>
+            </label>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, marginLeft: 22 }}>
+              关闭后只能从起点向终点发消息
+            </div>
+          </div>
+
+          {/* Priority */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>
+              优先级 <span style={{ fontWeight: 400, color: "var(--muted)" }}>{selectedEdge.priority ?? 0}</span>
+            </div>
+            <input
+              type="range" min={0} max={10} step={1}
+              value={selectedEdge.priority ?? 0}
+              onChange={(e) => updateEdgeData("priority", Number(e.target.value))}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          {/* Bandwidth limit */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>通信频率上限 (次/小时)</div>
+            <input
+              type="number" min={1} max={999}
+              style={{
+                width: 80, padding: "4px 8px", fontSize: 12,
+                border: "1px solid var(--line)", borderRadius: 4,
+                background: "var(--bg-card, #fff)", color: "var(--text)",
+              }}
+              value={selectedEdge.bandwidth_limit ?? 60}
+              onChange={(e) => updateEdgeData("bandwidth_limit", Number(e.target.value))}
+            />
+          </div>
+
+          {/* Delete */}
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+            <button
+              className="btnSmall"
+              onClick={handleDeleteEdge}
+              style={{ color: "var(--danger)", fontSize: 11, width: "100%" }}
+            >
+              <IconTrash size={12} /> 删除连线
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Right Panel: Org Settings (when no node/edge selected) ── */}
+      {currentOrg && !selectedNode && !selectedEdge && !isMobile && showRightPanel && (
         <div
           style={{
             width: 300,
@@ -2436,6 +2634,22 @@ export function OrgEditorView({
           visible={inboxOpen}
           onClose={() => setInboxOpen(false)}
         />
+      )}
+      </div>{/* close content area */}
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          zIndex: 9999, display: "flex", alignItems: "center", gap: 6,
+          padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 500,
+          color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+          background: toast.type === "ok" ? "var(--ok, #22c55e)" : "var(--danger, #ef4444)",
+          animation: "toast-in 0.2s ease",
+        }}>
+          {toast.type === "ok" ? <IconCheck size={14} /> : <IconAlertCircle size={14} />}
+          {toast.message}
+        </div>
       )}
     </div>
   );

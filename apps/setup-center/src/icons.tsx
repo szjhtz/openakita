@@ -842,3 +842,22 @@ export function IconBuilding(p: IconProps = {}) {
     <path d="M8 14h.01" />
   </>);
 }
+
+export function IconSitemap(p: IconProps = {}) {
+  return svg(p, <>
+    <rect x="9" y="2" width="6" height="4" rx="1" />
+    <rect x="2" y="14" width="6" height="4" rx="1" />
+    <rect x="9" y="14" width="6" height="4" rx="1" />
+    <rect x="16" y="14" width="6" height="4" rx="1" />
+    <path d="M12 6v4" />
+    <path d="M5 14v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2" />
+  </>);
+}
+
+export function IconAlertCircle(p: IconProps = {}) {
+  return svg(p, <>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="8" x2="12" y2="12" />
+    <line x1="12" y1="16" x2="12.01" y2="16" />
+  </>);
+}
