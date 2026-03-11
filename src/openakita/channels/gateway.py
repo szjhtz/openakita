@@ -867,10 +867,6 @@ class MessageGateway:
         self._started_adapters: list[str] = []
         self._failed_adapters: list[str] = []
 
-        # 并发处理：不同 session 的消息并行，同一 session 串行
-        self._session_locks: dict[str, asyncio.Lock] = {}
-        self._active_tasks: set[asyncio.Task] = set()
-
         # 中间件
         self._pre_process_hooks: list[Callable[[UnifiedMessage], Awaitable[UnifiedMessage]]] = []
         self._post_process_hooks: list[Callable[[UnifiedMessage, str], Awaitable[str]]] = []
@@ -1180,17 +1176,12 @@ class MessageGateway:
     def _apply_bot_agent_profile(self, session: Session, channel: str) -> None:
         """For multi-bot setups, apply the adapter's bound agent_profile_id
         to a newly-created session so the orchestrator routes to the correct agent.
-
-        只在以下情况重新应用：
-        1. 首次（_bot_default_agent 未设置）
-        2. adapter 的 agent_profile_id 发生变化（热更新配置）
+        Only runs once per session (guard: ``_bot_default_agent`` metadata).
         """
-        bot_agent = self._get_bot_default_agent(channel)
-        prev = session.get_metadata("_bot_default_agent")
-        if prev is not None and prev == bot_agent:
+        if session.get_metadata("_bot_default_agent") is not None:
             return
+        bot_agent = self._get_bot_default_agent(channel)
         session.set_metadata("_bot_default_agent", bot_agent)
-        # 仅在用户未手动切换过 Agent 时自动应用
         if bot_agent != "default" and not session.context.agent_switch_history:
             session.context.agent_profile_id = bot_agent
             self.session_manager.mark_dirty()
@@ -1198,8 +1189,6 @@ class MessageGateway:
                 f"[IM] Applied bot default agent: {bot_agent} "
                 f"for {session.session_key}"
             )
-        elif prev is None and bot_agent == "default":
-            session.set_metadata("_bot_default_agent", bot_agent)
 
     # ==================== 自然语言意图检测 ====================
 
@@ -1251,16 +1240,11 @@ class MessageGateway:
 
     async def start(self) -> None:
         """启动网关"""
-        from ..config import settings
-
         self._running = True
         self._accepting = True
 
-        # 预加载 Whisper 语音识别模型（仅在 whisper_enabled=True 时）
-        if settings.whisper_enabled:
-            asyncio.create_task(self._preload_whisper_async())
-        else:
-            logger.info("Local Whisper disabled (whisper_enabled=False), skipping model preload")
+        # 预加载 Whisper 语音识别模型（在后台线程中执行，不阻塞启动）
+        asyncio.create_task(self._preload_whisper_async())
 
         # 启动所有适配器
         started = []
@@ -1499,12 +1483,6 @@ class MessageGateway:
             self._processing_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._processing_task
-
-        # 取消所有活跃的并发消息处理任务
-        for task in list(self._active_tasks):
-            task.cancel()
-        if self._active_tasks:
-            await asyncio.gather(*self._active_tasks, return_exceptions=True)
 
         # 停止 per-session 字典清理任务
         cleanup_task = getattr(self, "_session_dict_cleanup_task", None)
@@ -1922,33 +1900,21 @@ class MessageGateway:
         logger.debug(f"[Interrupt] Registered callback for {session_key}")
 
     async def _process_loop(self) -> None:
-        """消息处理循环（并发调度：不同 session 并行，同 session 串行）"""
+        """消息处理循环"""
         while self._running:
             try:
+                # 从队列获取消息
                 message = await asyncio.wait_for(self._message_queue.get(), timeout=1.0)
-                task = asyncio.create_task(self._dispatch_message(message))
-                self._active_tasks.add(task)
-                task.add_done_callback(self._active_tasks.discard)
+
+                # 处理消息
+                await self._handle_message(message)
+
             except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error processing message: {e}", exc_info=True)
-
-        # 等待所有活跃任务完成
-        if self._active_tasks:
-            await asyncio.gather(*self._active_tasks, return_exceptions=True)
-
-    async def _dispatch_message(self, message: UnifiedMessage) -> None:
-        """按 session_key 串行化消息处理，不同 session 并行。"""
-        session_key = self._get_session_key(message)
-        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
-        async with lock:
-            try:
-                await self._handle_message(message)
-            except Exception as e:
-                logger.error(f"Error processing message for {session_key}: {e}", exc_info=True)
 
     async def _handle_message(self, message: UnifiedMessage) -> None:
         """
@@ -1962,6 +1928,7 @@ class MessageGateway:
             f"text=\"{user_text[:100]}\""
         )
 
+        typing_task: asyncio.Task | None = None
         try:
             # ==================== 群聊响应过滤 ====================
             if message.chat_type == "group" and not message.is_direct_message:
@@ -2090,8 +2057,8 @@ class MessageGateway:
 
             # ==================== 正常消息处理流程 ====================
 
-            # 1. 发送"正在输入"状态
-            await self._send_typing(message)
+            # 1. 启动持续 typing 状态（覆盖预处理 + Agent 全流程）
+            typing_task = asyncio.create_task(self._keep_typing(message))
 
             # 2. 预处理钩子
             for hook in self._pre_process_hooks:
@@ -2192,15 +2159,8 @@ class MessageGateway:
             self.session_manager.mark_dirty()  # 触发保存
             _notify_im_event("im:new_message", {"channel": message.channel, "role": "user"})
 
-            # 6. 调用 Agent 处理（支持中断检查 + 流式卡片更新）
-            _streamed = False
-            adapter = self._adapters.get(message.channel)
-            if adapter and getattr(adapter, "supports_streaming", False):
-                response_text, _streamed = await self._call_agent_with_streaming(
-                    session, message, adapter
-                )
-            else:
-                response_text = await self._call_agent_with_typing(session, message)
+            # 6. 调用 Agent 处理（支持中断检查）
+            response_text = await self._call_agent(session, message)
 
             # 7. 后处理钩子
             for hook in self._post_process_hooks:
@@ -2241,14 +2201,12 @@ class MessageGateway:
             self.session_manager.flush()
             _notify_im_event("im:new_message", {"channel": message.channel, "role": "assistant"})
 
-            # 9. 发送响应（流式模式已通过卡片推送，跳过）
+            # 9. 发送响应
             logger.info(
                 f"[IM] >>> 回复完成: channel={message.channel}, user={message.user_id}, "
-                f"len={len(response_text)}, streamed={_streamed}, "
-                f"preview=\"{response_text[:80]}\""
+                f"len={len(response_text)}, preview=\"{response_text[:80]}\""
             )
-            if not _streamed:
-                await self._send_response(message, response_text)
+            await self._send_response(message, response_text)
 
             # 10. 处理剩余的中断消息
             await self._process_pending_interrupts(session_key, session)
@@ -2275,6 +2233,15 @@ class MessageGateway:
             # 发送错误提示
             await self._send_error(message, str(e))
         finally:
+            if typing_task is not None:
+                typing_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await typing_task
+            # 清除"思考中"提示消息（QQ 官方等需要撤回文本提示的平台）
+            _adapter = self._adapters.get(message.channel)
+            if _adapter:
+                with contextlib.suppress(Exception):
+                    await _adapter.clear_typing(message.chat_id)
             # 标记会话处理完成
             async with self._interrupt_lock:
                 self._mark_session_processing(session_key, False)
@@ -2306,8 +2273,8 @@ class MessageGateway:
                 )
                 self.session_manager.mark_dirty()  # 触发保存
 
-                # 调用 Agent 处理
-                response_text = await self._call_agent_with_typing(session, interrupt_msg)
+                # 调用 Agent 处理（typing 由外层 typing_task 覆盖）
+                response_text = await self._call_agent(session, interrupt_msg)
 
                 # 后处理钩子
                 for hook in self._post_process_hooks:
@@ -2346,8 +2313,6 @@ class MessageGateway:
         """
         预处理媒体文件（下载语音、图片到本地，语音自动转文字）
         """
-        from ..config import settings
-
         adapter = self._adapters.get(message.channel)
         if not adapter:
             return
@@ -2361,34 +2326,27 @@ class MessageGateway:
             try:
                 async with sem:
                     if not voice.local_path:
-                        local_path = await adapter.download_media(voice)
+                        local_path = await asyncio.wait_for(
+                            adapter.download_media(voice), timeout=60
+                        )
                         voice.local_path = str(local_path)
                         logger.info(f"Voice downloaded: {voice.local_path}")
 
-                # 转写放在 download 之后；转写内部已使用线程池，不阻塞事件循环
                 if voice.local_path and not voice.transcription:
-                    transcription = None
-
-                    # 优先尝试在线 STT（配置了端点时）
-                    if self.stt_client and self.stt_client.is_available:
-                        transcription = await self.stt_client.transcribe(
-                            voice.local_path,
-                            language=self._whisper_language or None,
-                        )
-
-                    # 在线 STT 未配置或失败时，回退到本地 Whisper（需开启）
-                    if not transcription and settings.whisper_enabled:
-                        transcription = await self._transcribe_voice_local(
-                            voice.local_path
-                        )
-
+                    transcription = await asyncio.wait_for(
+                        self._transcribe_voice_local(voice.local_path), timeout=120
+                    )
                     if transcription:
                         voice.transcription = transcription
                         logger.info(f"Voice transcribed: {transcription}")
                     else:
                         voice.transcription = "[语音识别失败]"
+            except TimeoutError:
+                logger.error(f"Voice processing timed out: {voice.filename}")
+                voice.transcription = "[语音处理超时]"
             except Exception as e:
                 logger.error(f"Failed to process voice: {e}")
+                voice.transcription = "[语音处理失败]"
 
         async def _process_image(img) -> None:
             try:
@@ -2434,7 +2392,7 @@ class MessageGateway:
             tasks.append(_process_file(fil))
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=False)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _transcribe_voice_local(self, audio_path: str) -> str | None:
         """
@@ -2464,16 +2422,24 @@ class MessageGateway:
             whisper_lang = self._whisper_language
 
             def transcribe():
-                # QQ/微信语音使用 SILK 编码（.amr 扩展名），ffmpeg 不支持
-                # 需要先转换为 WAV 才能被 Whisper 识别
-                from openakita.channels.media.audio_utils import ensure_whisper_compatible
+                from openakita.channels.media.audio_utils import (
+                    ensure_whisper_compatible,
+                    load_wav_as_numpy,
+                )
 
                 compatible_path = ensure_whisper_compatible(audio_path)
 
-                # auto 模式不传 language，让 Whisper 自动检测
                 kwargs = {}
                 if whisper_lang and whisper_lang != "auto":
                     kwargs["language"] = whisper_lang
+
+                # 对已转换的 WAV 尝试直接 numpy 加载，绕过 ffmpeg 依赖
+                if compatible_path.endswith(".wav"):
+                    audio_array = load_wav_as_numpy(compatible_path)
+                    if audio_array is not None:
+                        result = self._whisper.transcribe(audio_array, **kwargs)
+                        return result["text"].strip()
+
                 result = self._whisper.transcribe(compatible_path, **kwargs)
                 return result["text"].strip()
 
@@ -2492,7 +2458,7 @@ class MessageGateway:
         adapter = self._adapters.get(message.channel)
         if adapter and hasattr(adapter, "send_typing"):
             try:
-                await adapter.send_typing(message.chat_id)
+                await adapter.send_typing(message.chat_id, thread_id=message.thread_id)
             except Exception:
                 pass  # 忽略 typing 发送失败
 
@@ -2501,10 +2467,12 @@ class MessageGateway:
         adapter = self._adapters.get(message.channel)
         if adapter and hasattr(adapter, "send_text"):
             try:
+                _meta = {"is_group": message.metadata.get("is_group", message.chat_type == "group")}
                 await adapter.send_text(
                     chat_id=message.chat_id,
                     text=text,
                     reply_to=message.channel_message_id,
+                    metadata=_meta,
                 )
             except Exception as e:
                 logger.warning(f"[Feedback] Failed to send feedback to {message.channel}: {e}")
@@ -2536,292 +2504,6 @@ class MessageGateway:
             await self._send_typing(message)
             await asyncio.sleep(4)  # Telegram typing 状态持续约 5 秒
 
-    # ==================== 流式卡片输出 ====================
-
-    _STREAM_THROTTLE_INTERVAL = 0.5  # 卡片更新最小间隔（秒）
-
-    async def _call_agent_with_streaming(
-        self, session: Session, message: UnifiedMessage, adapter: ChannelAdapter,
-    ) -> tuple[str, bool]:
-        """通过流式输出 + CardKit 卡片更新处理消息（飞书等支持的通道）。
-
-        Returns:
-            (response_text, streamed) — streamed=True 表示已通过卡片推送，
-            调用方无需再 _send_response；streamed=False 则仍需正常发送。
-        """
-        agent = getattr(self.agent_handler, "_agent_ref", None)
-        if agent is None or not hasattr(agent, "chat_with_session_stream"):
-            return await self._call_agent_with_typing(session, message), False
-
-        # Step 1: 创建 CardKit 占位卡片
-        card_id: str | None = None
-        try:
-            card_id = await adapter.create_card_entity("💭 正在思考...")
-        except Exception as e:
-            logger.warning(f"[Streaming] CardKit create failed, fallback: {e}")
-
-        if not card_id:
-            return await self._call_agent_with_typing(session, message), False
-
-        # Step 2: 发送占位卡片消息
-        try:
-            await adapter.send_card_by_id(message.chat_id, card_id)
-        except Exception as e:
-            logger.warning(f"[Streaming] Send card message failed, fallback: {e}")
-            return await self._call_agent_with_typing(session, message), False
-
-        logger.info(
-            f"[Streaming] Card placeholder sent: channel={message.channel}, "
-            f"card_id={card_id}"
-        )
-
-        # Step 3: 准备 Agent 输入（复用共享的多模态预处理逻辑）
-        input_text = await self._prepare_agent_call(session, message)
-
-        session_key = self._get_session_key(message)
-        session.set_metadata("_gateway", self)
-        session.set_metadata("_session_key", session_key)
-        session.set_metadata("_current_message", message)
-
-        # Step 4: 流式调用 Agent + 节流卡片更新
-        accumulated = ""
-        last_update_time = 0.0
-        _final_text = ""
-
-        try:
-            session_messages = session.context.get_messages()
-            async for event in agent.chat_with_session_stream(
-                message=input_text,
-                session_messages=session_messages,
-                session_id=session.id,
-                session=session,
-                gateway=self,
-            ):
-                event_type = event.get("type", "")
-
-                if event_type == "text_delta":
-                    accumulated += event.get("content", "")
-
-                    # 节流：每 _STREAM_THROTTLE_INTERVAL 最多更新一次
-                    now = asyncio.get_event_loop().time()
-                    if now - last_update_time >= self._STREAM_THROTTLE_INTERVAL:
-                        try:
-                            await adapter.update_card_content(
-                                card_id, accumulated or "💭 正在思考..."
-                            )
-                        except Exception:
-                            pass
-                        last_update_time = now
-
-                elif event_type == "thinking_start":
-                    try:
-                        await adapter.update_card_content(card_id, "🧠 正在深度思考...")
-                    except Exception:
-                        pass
-
-                elif event_type == "tool_call_start":
-                    tool_name = event.get("name", "工具")
-                    status = f"{accumulated}\n\n⚙️ 正在调用 `{tool_name}`..." if accumulated else f"⚙️ 正在调用 `{tool_name}`..."
-                    try:
-                        await adapter.update_card_content(card_id, status)
-                    except Exception:
-                        pass
-
-                elif event_type == "done":
-                    break
-
-                elif event_type == "error":
-                    err_msg = event.get("message", "未知错误")
-                    accumulated = accumulated or f"❌ 处理出错: {err_msg}"
-                    break
-
-            _final_text = accumulated
-
-        except Exception as e:
-            logger.error(f"[Streaming] Agent stream error: {e}", exc_info=True)
-            _final_text = accumulated or f"❌ 处理出错: {str(e)}"
-
-        finally:
-            self._cleanup_agent_call(session)
-
-        # Step 5: 兜底更新 — 确保最终内容同步到卡片
-        if _final_text:
-            try:
-                await adapter.update_card_content(card_id, _final_text)
-                return _final_text, True
-            except Exception as e:
-                logger.warning(f"[Streaming] Final card update failed: {e}")
-                # 卡片更新失败 → 标记为未流式，让调用方走普通发送
-                return _final_text, False
-
-        return _final_text, True
-
-    async def _prepare_agent_call(
-        self, session: Session, message: UnifiedMessage,
-    ) -> str:
-        """准备 Agent 调用的输入：处理语音/图片/视频/文件等多模态数据。
-
-        将媒体数据编码并存入 session.metadata，返回最终的 input_text。
-        """
-        input_text = message.plain_text
-
-        # 处理语音文件 - 双路策略：保留原始音频 + Whisper 转写
-        audio_data_list = []
-        for voice in message.content.voices:
-            if voice.local_path and Path(voice.local_path).exists():
-                audio_data_list.append({
-                    "local_path": voice.local_path,
-                    "mime_type": voice.mime_type or "audio/wav",
-                    "duration": voice.duration,
-                    "transcription": voice.transcription if voice.transcription not in (None, "", "[语音识别失败]") else None,
-                })
-
-            if voice.transcription and voice.transcription not in ("[语音识别失败]", ""):
-                if not input_text.strip() or "[语音:" in input_text:
-                    input_text = voice.transcription
-                    logger.info(f"Using voice transcription as input: {input_text}")
-                else:
-                    input_text = f"{input_text}\n\n[语音内容: {voice.transcription}]"
-            elif voice.local_path:
-                session.set_metadata(
-                    "pending_voices",
-                    [{"local_path": voice.local_path, "duration": voice.duration}],
-                )
-                if not input_text.strip() or "[语音:" in input_text:
-                    input_text = (
-                        f"[用户发送了语音消息，但自动识别失败。文件路径: {voice.local_path}]"
-                    )
-                logger.info(f"Voice transcription failed, file: {voice.local_path}")
-
-        if audio_data_list:
-            session.set_metadata("pending_audio", audio_data_list)
-            logger.info(f"Stored {len(audio_data_list)} raw audio files for Agent decision")
-
-        # 处理图片文件 - 多模态输入
-        images_data = []
-        for img in message.content.images:
-            if img.local_path and Path(img.local_path).exists():
-                try:
-                    with open(img.local_path, "rb") as f:
-                        image_data = base64.b64encode(f.read()).decode("utf-8")
-                        images_data.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": img.mime_type or "image/jpeg",
-                                    "data": image_data,
-                                },
-                                "local_path": img.local_path,
-                            }
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to read image: {e}")
-
-        if images_data:
-            session.set_metadata("pending_images", images_data)
-            if not input_text.strip():
-                input_text = "[用户发送了图片]"
-            logger.info(f"Processing multimodal message with {len(images_data)} images")
-
-        # 处理视频文件 - 多模态输入
-        videos_data = []
-        VIDEO_SIZE_LIMIT = 7 * 1024 * 1024
-        for vid in message.content.videos:
-            if vid.local_path and Path(vid.local_path).exists():
-                try:
-                    file_size = Path(vid.local_path).stat().st_size
-                    if file_size <= VIDEO_SIZE_LIMIT:
-                        with open(vid.local_path, "rb") as f:
-                            video_data = base64.b64encode(f.read()).decode("utf-8")
-                            videos_data.append(
-                                {
-                                    "type": "video",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": vid.mime_type or "video/mp4",
-                                        "data": video_data,
-                                    },
-                                    "local_path": vid.local_path,
-                                }
-                            )
-                        logger.info(f"Video encoded as base64: {vid.local_path} ({file_size / 1024 / 1024:.1f}MB)")
-                    else:
-                        logger.info(
-                            f"Video too large ({file_size / 1024 / 1024:.1f}MB > 7MB), "
-                            f"extracting keyframes: {vid.local_path}"
-                        )
-                        keyframes = await self._extract_video_keyframes(vid.local_path)
-                        if keyframes:
-                            for kf_data, kf_mime in keyframes:
-                                images_data.append(
-                                    {
-                                        "type": "image",
-                                        "source": {
-                                            "type": "base64",
-                                            "media_type": kf_mime,
-                                            "data": kf_data,
-                                        },
-                                        "local_path": vid.local_path,
-                                    }
-                                )
-                            session.set_metadata("pending_images", images_data)
-                            logger.info(f"Extracted {len(keyframes)} keyframes from video")
-                        else:
-                            logger.warning(f"Failed to extract keyframes from: {vid.local_path}")
-                except Exception as e:
-                    logger.error(f"Failed to process video: {e}")
-
-        if videos_data:
-            session.set_metadata("pending_videos", videos_data)
-            if not input_text.strip():
-                input_text = "[用户发送了视频]"
-            logger.info(f"Processing multimodal message with {len(videos_data)} videos")
-
-        # 处理文件 - PDF 等文档的多模态输入
-        files_data = []
-        for fil in message.content.files:
-            if fil.local_path and Path(fil.local_path).exists():
-                try:
-                    mime = fil.mime_type or ""
-                    suffix = Path(fil.local_path).suffix.lower()
-                    if suffix == ".pdf" or "pdf" in mime:
-                        file_data = base64.b64encode(
-                            Path(fil.local_path).read_bytes()
-                        ).decode("utf-8")
-                        files_data.append({
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": file_data,
-                            },
-                            "filename": fil.file_name or Path(fil.local_path).name,
-                            "local_path": fil.local_path,
-                        })
-                        logger.info(f"PDF file encoded: {fil.local_path}")
-                    else:
-                        input_text += f"\n[附件: {fil.file_name or Path(fil.local_path).name} ({mime or suffix})]"
-                except Exception as e:
-                    logger.error(f"Failed to process file: {e}")
-
-        if files_data:
-            session.set_metadata("pending_files", files_data)
-            if not input_text.strip():
-                input_text = "[用户发送了文件]"
-            logger.info(f"Processing multimodal message with {len(files_data)} files")
-
-        return input_text
-
-    def _cleanup_agent_call(self, session: Session) -> None:
-        """清除 Agent 调用后的临时 session 数据。"""
-        for key in (
-            "pending_images", "pending_videos", "pending_audio",
-            "pending_files", "pending_voices",
-            "_gateway", "_session_key", "_current_message",
-        ):
-            session.set_metadata(key, None)
-
     async def _call_agent(self, session: Session, message: UnifiedMessage) -> str:
         """
         调用 Agent 处理消息（支持多模态：图片、语音）
@@ -2832,16 +2514,188 @@ class MessageGateway:
             return "Agent handler not configured"
 
         try:
-            input_text = await self._prepare_agent_call(session, message)
+            # 构建输入（文本 + 图片 + 语音）
+            input_text = message.plain_text
 
+            # 处理语音文件 - 双路策略：保留原始音频 + Whisper 转写
+            audio_data_list = []
+            for voice in message.content.voices:
+                # 双路保留：始终存储原始音频路径到 pending_audio
+                if voice.local_path and Path(voice.local_path).exists():
+                    audio_data_list.append({
+                        "local_path": voice.local_path,
+                        "mime_type": voice.mime_type or "audio/wav",
+                        "duration": voice.duration,
+                        "transcription": voice.transcription if voice.transcription not in (None, "", "[语音识别失败]") else None,
+                    })
+
+                if voice.transcription and voice.transcription not in ("[语音识别失败]", ""):
+                    # 语音已转写，用转写文字作为输入（保底）
+                    if not input_text.strip() or "[语音:" in input_text:
+                        input_text = voice.transcription
+                        logger.info(f"Using voice transcription as input: {input_text}")
+                    else:
+                        input_text = f"{input_text}\n\n[语音内容: {voice.transcription}]"
+                elif voice.local_path:
+                    # 语音未转写成功，保存路径供 Agent 手动处理
+                    session.set_metadata(
+                        "pending_voices",
+                        [
+                            {
+                                "local_path": voice.local_path,
+                                "duration": voice.duration,
+                            }
+                        ],
+                    )
+                    if not input_text.strip() or "[语音:" in input_text:
+                        input_text = (
+                            f"[用户发送了语音消息，但自动识别失败。文件路径: {voice.local_path}]"
+                        )
+                    logger.info(f"Voice transcription failed, file: {voice.local_path}")
+
+            # 存储原始音频数据到 session（供 Agent 做三级决策）
+            if audio_data_list:
+                session.set_metadata("pending_audio", audio_data_list)
+                logger.info(f"Stored {len(audio_data_list)} raw audio files for Agent decision")
+
+            # 处理图片文件 - 多模态输入
+            images_data = []
+            for img in message.content.images:
+                if img.local_path and Path(img.local_path).exists():
+                    try:
+                        with open(img.local_path, "rb") as f:
+                            image_data = base64.b64encode(f.read()).decode("utf-8")
+                            images_data.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": img.mime_type or "image/jpeg",
+                                        "data": image_data,
+                                    },
+                                    "local_path": img.local_path,  # 也保存路径
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to read image: {e}")
+
+            # 如果有图片，构建多模态输入
+            if images_data:
+                # 存储图片数据到 session，供 Agent 使用
+                session.set_metadata("pending_images", images_data)
+                if not input_text.strip():
+                    input_text = "[用户发送了图片]"
+                logger.info(f"Processing multimodal message with {len(images_data)} images")
+
+            # 处理视频文件 - 多模态输入
+            videos_data = []
+            VIDEO_SIZE_LIMIT = 7 * 1024 * 1024  # 7MB (base64 后 ~9.3MB，低于 DashScope 10MB data-uri 限制)
+            for vid in message.content.videos:
+                if vid.local_path and Path(vid.local_path).exists():
+                    try:
+                        file_size = Path(vid.local_path).stat().st_size
+                        if file_size <= VIDEO_SIZE_LIMIT:
+                            with open(vid.local_path, "rb") as f:
+                                video_data = base64.b64encode(f.read()).decode("utf-8")
+                                videos_data.append(
+                                    {
+                                        "type": "video",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": vid.mime_type or "video/mp4",
+                                            "data": video_data,
+                                        },
+                                        "local_path": vid.local_path,
+                                    }
+                                )
+                            logger.info(f"Video encoded as base64: {vid.local_path} ({file_size / 1024 / 1024:.1f}MB)")
+                        else:
+                            # 视频超过大小限制，用 ffmpeg 截取关键帧降级为图片
+                            logger.info(
+                                f"Video too large ({file_size / 1024 / 1024:.1f}MB > 7MB), "
+                                f"extracting keyframes: {vid.local_path}"
+                            )
+                            keyframes = await self._extract_video_keyframes(vid.local_path)
+                            if keyframes:
+                                for kf_data, kf_mime in keyframes:
+                                    images_data.append(
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": kf_mime,
+                                                "data": kf_data,
+                                            },
+                                            "local_path": vid.local_path,
+                                        }
+                                    )
+                                # 更新 pending_images
+                                session.set_metadata("pending_images", images_data)
+                                logger.info(f"Extracted {len(keyframes)} keyframes from video")
+                            else:
+                                logger.warning(f"Failed to extract keyframes from: {vid.local_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to process video: {e}")
+
+            if videos_data:
+                session.set_metadata("pending_videos", videos_data)
+                if not input_text.strip():
+                    input_text = "[用户发送了视频]"
+                logger.info(f"Processing multimodal message with {len(videos_data)} videos")
+
+            # 处理文件 - PDF 等文档的多模态输入
+            files_data = []
+            for fil in message.content.files:
+                if fil.local_path and Path(fil.local_path).exists():
+                    try:
+                        mime = fil.mime_type or ""
+                        suffix = Path(fil.local_path).suffix.lower()
+                        if suffix == ".pdf" or "pdf" in mime:
+                            file_data = base64.b64encode(
+                                Path(fil.local_path).read_bytes()
+                            ).decode("utf-8")
+                            files_data.append({
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": file_data,
+                                },
+                                "filename": fil.file_name or Path(fil.local_path).name,
+                                "local_path": fil.local_path,
+                            })
+                            logger.info(f"PDF file encoded: {fil.local_path}")
+                        else:
+                            # 非 PDF 文件，作为文本描述
+                            input_text += f"\n[附件: {fil.file_name or Path(fil.local_path).name} ({mime or suffix})]"
+                    except Exception as e:
+                        logger.error(f"Failed to process file: {e}")
+
+            if files_data:
+                session.set_metadata("pending_files", files_data)
+                if not input_text.strip():
+                    input_text = "[用户发送了文件]"
+                logger.info(f"Processing multimodal message with {len(files_data)} files")
+
+            # === 中断机制：传递 gateway 引用和会话标识 ===
             session_key = self._get_session_key(message)
             session.set_metadata("_gateway", self)
             session.set_metadata("_session_key", session_key)
             session.set_metadata("_current_message", message)
 
+            # 调用 Agent
             response = await self.agent_handler(session, input_text)
 
-            self._cleanup_agent_call(session)
+            # 清除临时数据
+            session.set_metadata("pending_images", None)
+            session.set_metadata("pending_videos", None)
+            session.set_metadata("pending_audio", None)
+            session.set_metadata("pending_files", None)
+            session.set_metadata("pending_voices", None)
+            session.set_metadata("_gateway", None)
+            session.set_metadata("_session_key", None)
+            session.set_metadata("_current_message", None)
+
             return response
 
         except Exception as e:
@@ -2966,6 +2820,8 @@ class MessageGateway:
                             await adapter.send_text(
                                 chat_id=original.chat_id,
                                 text=f"消息发送失败（第 {i + 1}/{len(messages)} 段），请稍后重试。",
+                                reply_to=original.thread_id or original.channel_message_id,
+                                metadata=outgoing_meta,
                             )
 
     async def _send_error(self, original: UnifiedMessage, error: str) -> None:
@@ -2977,10 +2833,12 @@ class MessageGateway:
             return
 
         try:
+            _meta = {"is_group": original.metadata.get("is_group", original.chat_type == "group")}
             await adapter.send_text(
                 chat_id=original.chat_id,
                 text=f"❌ 处理出错: {error}",
                 reply_to=original.channel_message_id,
+                metadata=_meta,
             )
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
@@ -3056,18 +2914,19 @@ class MessageGateway:
 
                 header = f"📋 每日系统自检报告（{report_date}）\n\n"
                 full_text = header + report_md
+                _meta = {"is_group": message.metadata.get("is_group", message.chat_type == "group")}
 
                 # 分段发送（兼容 Telegram 4096 限制）
                 max_len = 3500
                 text = full_text
                 while text:
                     if len(text) <= max_len:
-                        await adapter.send_text(message.chat_id, text)
+                        await adapter.send_text(message.chat_id, text, metadata=_meta)
                         break
                     cut = text.rfind("\n", 0, max_len)
                     if cut < 1000:
                         cut = max_len
-                    await adapter.send_text(message.chat_id, text[:cut].rstrip())
+                    await adapter.send_text(message.chat_id, text[:cut].rstrip(), metadata=_meta)
                     text = text[cut:].lstrip()
 
                 # 标记为已推送
@@ -3145,6 +3004,11 @@ class MessageGateway:
         """
         发送消息到会话
         """
+        # 话题感知：session 关联了话题且调用者未显式指定 reply_to 时，
+        # 自动使用 thread_id 使消息留在话题内（飞书等平台需要 reply 才能定位到话题）
+        if session.thread_id and "reply_to" not in kwargs:
+            kwargs["reply_to"] = session.thread_id
+
         result = await self.send(
             channel=session.channel,
             chat_id=session.chat_id,
@@ -3196,6 +3060,8 @@ class MessageGateway:
         throttle = self._progress_throttle_seconds if throttle_seconds is None else throttle_seconds
 
         buf = self._progress_buffers.setdefault(session_key, [])
+        if buf and buf[-1] == text:
+            return  # 连续相同消息去重
         buf.append(text)
 
         existing = self._progress_flush_tasks.get(session_key)

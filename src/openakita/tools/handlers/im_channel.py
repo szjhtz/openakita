@@ -705,8 +705,9 @@ class IMChannelHandler:
             message_id = await adapter.send_file(chat_id, file_path, caption, **send_kwargs)
             logger.info(f"[IM] Sent file to {channel}:{chat_id}: {file_path}")
             return f"✅ 已发送文件: {file_path} (message_id={message_id})"
-        except NotImplementedError:
-            return f"❌ 当前平台 ({channel}) 不支持发送文件"
+        except NotImplementedError as e:
+            reason = str(e)
+            return f"❌ {reason}" if reason else f"❌ 当前平台 ({channel}) 不支持发送文件"
 
     async def _send_image(
         self,
@@ -744,11 +745,11 @@ class IMChannelHandler:
             )
             logger.info(f"[IM] Sent image to {channel}:{chat_id}: {image_path}")
             return f"✅ 已发送图片: {image_path} (message_id={message_id})"
-        except NotImplementedError:
-            pass
+        except NotImplementedError as e:
+            _img_reason = str(e)
         except Exception as e:
             logger.warning(f"[IM] send_image failed for {channel}: {e}")
-            # 非 NotImplementedError（如 stream 过期、图片处理失败）→ 降级到 send_file
+            _img_reason = ""
 
         # 降级：以文件形式发送图片
         try:
@@ -756,7 +757,11 @@ class IMChannelHandler:
             logger.info(f"[IM] Sent image as file to {channel}:{chat_id}: {image_path}")
             return f"✅ 已发送图片(作为文件): {image_path} (message_id={message_id})"
         except NotImplementedError:
-            return f"❌ 当前平台 ({channel}) 不支持发送图片"
+            pass
+
+        if _img_reason:
+            return f"❌ {_img_reason}"
+        return f"❌ 当前平台 ({channel}) 不支持发送图片"
 
     async def _send_voice(
         self, adapter: "ChannelAdapter", chat_id: str, voice_path: str, caption: str, channel: str
@@ -771,8 +776,8 @@ class IMChannelHandler:
             message_id = await adapter.send_voice(chat_id, voice_path, caption)
             logger.info(f"[IM] Sent voice to {channel}:{chat_id}: {voice_path}")
             return f"✅ 已发送语音: {voice_path} (message_id={message_id})"
-        except NotImplementedError:
-            pass
+        except NotImplementedError as e:
+            _voice_reason = str(e)
 
         # 降级：以文件形式发送语音
         try:
@@ -780,7 +785,11 @@ class IMChannelHandler:
             logger.info(f"[IM] Sent voice as file to {channel}:{chat_id}: {voice_path}")
             return f"✅ 已发送语音(作为文件): {voice_path} (message_id={message_id})"
         except NotImplementedError:
-            return f"❌ 当前平台 ({channel}) 不支持发送语音"
+            pass
+
+        if _voice_reason:
+            return f"❌ {_voice_reason}"
+        return f"❌ 当前平台 ({channel}) 不支持发送语音"
 
     def _get_voice_file(self, params: dict) -> str:
         """获取语音文件路径"""

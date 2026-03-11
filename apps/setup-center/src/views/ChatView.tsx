@@ -1,7 +1,7 @@
 // ─── ChatView: 完整 AI 聊天页面 ───
 // 支持流式 MD 渲染、思考内容折叠、Plan/Todo、斜杠命令、多模态、多 Agent、端点选择
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -1119,7 +1119,7 @@ function SlashCommandPanel({
 
 // ─── 消息渲染 ───
 
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   msg,
   onAskAnswer,
   apiBaseUrl,
@@ -1353,11 +1353,11 @@ function MessageBubble({
       </div>
     </div>
   );
-}
+});
 
 // ─── Flat Mode (Cursor 风格无气泡模式) ───
 
-function FlatMessageItem({
+const FlatMessageItem = memo(function FlatMessageItem({
   msg,
   onAskAnswer,
   apiBaseUrl,
@@ -1589,7 +1589,7 @@ function FlatMessageItem({
       </div>
     </div>
   );
-}
+});
 
 // ─── SVG icon helper ───
 const _SVG_PATHS: Record<string, string> = {
@@ -1776,11 +1776,15 @@ export function ChatView({
       return raw ? JSON.parse(raw) : [];
     } catch { return []; }
   });
-  const [inputText, setInputText] = useState("");
+  const inputTextRef = useRef("");
+  const [hasInputText, setHasInputText] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState("auto");
   const [planMode, setPlanMode] = useState(false);
   const [streamingTick, setStreamingTick] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 768);
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    try { return localStorage.getItem("openakita_convSidebarPinned") === "true"; } catch { return false; }
+  });
   const [convSearchQuery, setConvSearchQuery] = useState("");
   const [orbitTip, setOrbitTip] = useState<{ x: number; y: number; name: string; title: string } | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -2133,6 +2137,18 @@ export function ChatView({
   // abortRef/readerRef removed — now per-session in StreamContext
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const setInputValue = useCallback((val: string) => {
+    inputTextRef.current = val;
+    setHasInputText(val.trim().length > 0);
+    if (inputRef.current) {
+      inputRef.current.value = val;
+      inputRef.current.style.height = "auto";
+      if (val) {
+        inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + "px";
+      }
+    }
+  }, []);
+
   // Fetch initial context size on mount / when service starts
   useEffect(() => {
     if (!serviceRunning) return;
@@ -2479,7 +2495,7 @@ export function ChatView({
     { id: "clear", label: "清空对话", description: "清除当前对话的所有消息", action: () => { setMessages([]); } },
     { id: "skill", label: "使用技能", description: "调用已安装的技能（发送 /skill:<技能名> 触发）", action: (args) => {
       if (args) {
-        setInputText(`请使用技能「${args}」来帮我：`);
+        setInputValue(`请使用技能「${args}」来帮我：`);
       } else {
         setMessages((prev) => [...prev, { id: genId(), role: "system", content: "用法: /skill <技能名>，如 /skill web-search。在消息中提及技能名即可触发。", timestamp: Date.now() }]);
       }
@@ -2493,7 +2509,7 @@ export function ChatView({
     }},
     { id: "agent", label: "切换 Agent", description: "在多 Agent 间切换（handoff 模式）", action: (args) => {
       if (args) {
-        setInputText(`请切换到 Agent「${args}」来处理接下来的任务。`);
+        setInputValue(`请切换到 Agent「${args}」来处理接下来的任务。`);
       } else {
         setMessages((prev) => [...prev, { id: genId(), role: "system", content: "用法: /agent <Agent名称>。在 handoff 模式下，AI 会自动在 Agent 间切换。", timestamp: Date.now() }]);
       }
@@ -2651,7 +2667,7 @@ export function ChatView({
   // ── 发送消息（overrideText 用于 ask_user 回复等场景，绕过 inputText；targetConvId 用于自动出队等需要指定目标会话的场景） ──
   // displayContent: 当发送给 API 的原文（如 JSON）不适合直接展示时，可指定用户气泡中的显示文本
   const sendMessage = useCallback(async (overrideText?: string, targetConvId?: string, displayContent?: string) => {
-    const text = (overrideText ?? inputText).trim();
+    const text = (overrideText ?? inputTextRef.current).trim();
     if (!text && pendingAttachments.length === 0) return;
     if (orgCommandPendingRef.current) return;
 
@@ -2668,7 +2684,7 @@ export function ChatView({
       const cmd = slashCommands.find((c) => c.id === cmdId);
       if (cmd) {
         cmd.action(parts.slice(1).join(" "));
-        setInputText("");
+        setInputValue("");
         setSlashOpen(false);
         return;
       }
@@ -2867,7 +2883,7 @@ export function ChatView({
 
     let convId = resolvedConvId;
 
-    setInputText("");
+    setInputValue("");
     setPendingAttachments([]);
     setSlashOpen(false);
     if (!convId) {
@@ -3633,7 +3649,7 @@ export function ChatView({
         return updated;
       });
     }
-  }, [inputText, pendingAttachments, isCurrentConvStreaming, activeConvId, planMode, selectedEndpoint, apiBase, slashCommands, thinkingMode, thinkingDepth, t]);
+  }, [pendingAttachments, isCurrentConvStreaming, activeConvId, planMode, selectedEndpoint, apiBase, slashCommands, thinkingMode, thinkingDepth, t, setInputValue]);
 
   // ── 处理用户回答 (ask_user) ──
   const handleAskAnswer = useCallback((msgId: string, answer: string) => {
@@ -3675,6 +3691,10 @@ export function ChatView({
     }).catch(() => {});
   }, [apiBase, activeConvId]);
 
+  const handleImagePreview = useCallback((url: string, name: string) => {
+    setLightbox({ url, name });
+  }, []);
+
   const handleCancelTask = useCallback(() => {
     safeFetch(`${apiBase}/api/chat/cancel`, {
       method: "POST",
@@ -3713,15 +3733,11 @@ export function ChatView({
   }, [apiBase, activeConvId]);
 
   const handleQueueMessage = useCallback(() => {
-    const text = inputText.trim();
+    const text = inputTextRef.current.trim();
     if (!text || !activeConvId) return;
     setMessageQueue(prev => [...prev, { id: genId(), text, timestamp: Date.now(), convId: activeConvId }]);
-    setInputText("");
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      inputRef.current.style.height = "auto";
-    }
-  }, [inputText, activeConvId]);
+    setInputValue("");
+  }, [activeConvId, setInputValue]);
 
   const handleRemoveQueued = useCallback((id: string) => {
     setMessageQueue(prev => prev.filter(m => m.id !== id));
@@ -3730,11 +3746,11 @@ export function ChatView({
   const handleEditQueued = useCallback((id: string) => {
     const item = messageQueue.find(m => m.id === id);
     if (item) {
-      setInputText(item.text);
+      setInputValue(item.text);
       setMessageQueue(prev => prev.filter(m => m.id !== id));
       inputRef.current?.focus();
     }
-  }, [messageQueue]);
+  }, [messageQueue, setInputValue]);
 
   const handleSendQueuedNow = useCallback((id: string) => {
     const item = messageQueue.find(m => m.id === id);
@@ -3985,7 +4001,7 @@ export function ChatView({
         const cmd = filtered[slashSelectedIdx];
         if (cmd) {
           cmd.action("");
-          setInputText("");
+          setInputValue("");
           setSlashOpen(false);
         }
       } else if (e.key === "Escape") {
@@ -4004,8 +4020,7 @@ export function ChatView({
         e.preventDefault();
         if (domText) {
           handleInsertMessage(domText);
-          setInputText("");
-          if (inputRef.current) { inputRef.current.value = ""; inputRef.current.style.height = "auto"; }
+          setInputValue("");
         }
       } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -4029,25 +4044,15 @@ export function ChatView({
         sendMessage();
       }
     }
-  }, [slashOpen, slashFilter, slashCommands, slashSelectedIdx, sendMessage, isCurrentConvStreaming, inputText, handleInsertMessage, handleQueueMessage, messageQueue, activeConvId]);
+  }, [slashOpen, slashFilter, slashCommands, slashSelectedIdx, sendMessage, isCurrentConvStreaming, handleInsertMessage, handleQueueMessage, messageQueue, activeConvId, setInputValue]);
 
-  // ── 输入变化处理 ──
+  // ── 输入变化处理（非受控模式：仅更新 ref，不触发全局重渲染） ──
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
-    setInputText(val);
+    inputTextRef.current = val;
+    const has = val.trim().length > 0;
+    setHasInputText(prev => prev !== has ? has : prev);
 
-    // @org: 前缀检测 — 自动切换到组织模式
-    const orgMatch = val.match(/^@org:(\S+)\s/);
-    if (orgMatch && !orgMode) {
-      const target = orgMatch[1];
-      const match = orgList.find(o => o.name.includes(target) || o.id === target);
-      if (match) {
-        setOrgMode(true);
-        setSelectedOrgId(match.id);
-      }
-    }
-
-    // 斜杠命令检测
     if (val.startsWith("/") && !val.includes(" ")) {
       setSlashOpen(true);
       setSlashFilter(val.slice(1));
@@ -4228,7 +4233,7 @@ export function ChatView({
       )}
 
       {/* 主聊天区 */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }} onMouseDown={() => { if (sidebarOpen) setSidebarOpen(false); }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }} onMouseDown={() => { if (sidebarOpen && !sidebarPinned) setSidebarOpen(false); }}>
         {/* Chat top bar */}
         <div className="chatTopBar">
           <button onClick={newConversation} className="chatTopBarBtn">
@@ -4334,9 +4339,9 @@ export function ChatView({
           )}
           {messages.map((msg) =>
             displayMode === "flat" ? (
-              <FlatMessageItem key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} mdModules={mdModules} />
+              <FlatMessageItem key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={handleImagePreview} mdModules={mdModules} />
             ) : (
-              <MessageBubble key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={(url, name) => setLightbox({ url, name })} mdModules={mdModules} />
+              <MessageBubble key={msg.id} msg={msg} onAskAnswer={handleAskAnswer} apiBaseUrl={apiBaseUrl} showChain={showChain} onSkipStep={handleSkipStep} onImagePreview={handleImagePreview} mdModules={mdModules} />
             )
           )}
 
@@ -4401,7 +4406,7 @@ export function ChatView({
               filter={slashFilter}
               onSelect={(cmd) => {
                 cmd.action("");
-                setInputText("");
+                setInputValue("");
                 setSlashOpen(false);
               }}
               selectedIdx={slashSelectedIdx}
@@ -4643,7 +4648,6 @@ export function ChatView({
             {/* Textarea */}
             <textarea
               ref={inputRef}
-              value={inputText}
               onChange={handleInputChange}
               onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
@@ -4759,8 +4763,8 @@ export function ChatView({
                     </div>
                   );
                 })()}
-                {isCurrentConvStreaming || orgCommandPending ? (
-                  inputText.trim() && !orgCommandPending ? (
+                {isCurrentConvStreaming ? (
+                  hasInputText ? (
                     <button
                       onClick={handleQueueMessage}
                       className="chatInputSendBtn"
@@ -4783,7 +4787,7 @@ export function ChatView({
                   <button
                     onClick={() => sendMessage()}
                     className="chatInputSendBtn"
-                    disabled={!inputText.trim() && pendingAttachments.length === 0}
+                    disabled={!hasInputText && pendingAttachments.length === 0}
                     title={t("chat.send")}
                   >
                     <IconSend size={14} />
@@ -4803,19 +4807,33 @@ export function ChatView({
         )}
         <div className={`convSidebar${typeof window !== "undefined" && window.innerWidth <= 768 ? " convSidebarMobileOpen" : ""}`}>
           <div className="convSidebarHeader">
-            <div className="convSearchBox">
-              <IconSearch size={13} style={{ opacity: 0.4, flexShrink: 0 }} />
-              <input
-                className="convSearchInput"
-                placeholder={t("chat.searchConversations") || "搜索会话..."}
-                value={convSearchQuery}
-                onChange={(e) => setConvSearchQuery(e.target.value)}
-              />
-              {convSearchQuery && (
-                <button className="convSearchClear" onClick={() => setConvSearchQuery("")}>
-                  <IconX size={11} />
-                </button>
-              )}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div className="convSearchBox" style={{ flex: 1 }}>
+                <IconSearch size={13} style={{ opacity: 0.4, flexShrink: 0 }} />
+                <input
+                  className="convSearchInput"
+                  placeholder={t("chat.searchConversations") || "搜索会话..."}
+                  value={convSearchQuery}
+                  onChange={(e) => setConvSearchQuery(e.target.value)}
+                />
+                {convSearchQuery && (
+                  <button className="convSearchClear" onClick={() => setConvSearchQuery("")}>
+                    <IconX size={11} />
+                  </button>
+                )}
+              </div>
+              <button
+                className="convPinBtn"
+                onClick={() => {
+                  const next = !sidebarPinned;
+                  setSidebarPinned(next);
+                  try { localStorage.setItem("openakita_convSidebarPinned", String(next)); } catch {}
+                }}
+                title={sidebarPinned ? (t("chat.unpinSidebar") || "取消固定") : (t("chat.pinSidebar") || "固定会话列表")}
+                style={{ color: sidebarPinned ? "var(--brand, #0ea5e9)" : "var(--muted2, #999)" }}
+              >
+                <IconPin size={14} />
+              </button>
             </div>
             <button className="convNewBtn" onClick={newConversation}>
               {t("chat.newConversation")}

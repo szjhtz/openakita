@@ -113,6 +113,7 @@ _CHANNEL_DEPS: dict[str, list[tuple[str, str]]] = {
     "wework": [("aiohttp", "aiohttp"), ("Crypto", "pycryptodome")],
     "wework_ws": [("websockets", "websockets")],
     "onebot": [("websockets", "websockets")],
+    "onebot_reverse": [("websockets", "websockets")],
     "qqbot": [("botpy", "qq-botpy"), ("pilk", "pilk")],
 }
 
@@ -512,12 +513,23 @@ def _create_bot_adapter(bot_type: str, creds: dict, *, channel_name: str, bot_id
             secret=creds.get("secret", ""),
             ws_url=creds.get("ws_url", "wss://openws.work.weixin.qq.com"),
             channel_name=channel_name, bot_id_alias=bot_id, agent_profile_id=agent_profile_id,
+            webhook_url=creds.get("webhook_url", ""),
         )
     elif bot_type == "onebot":
         from .channels.adapters import OneBotAdapter
         return OneBotAdapter(
             ws_url=creds.get("ws_url", "ws://127.0.0.1:8080"),
             access_token=creds.get("access_token") or None,
+            mode=creds.get("mode", "forward"),
+            channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id,
+        )
+    elif bot_type == "onebot_reverse":
+        from .channels.adapters import OneBotAdapter
+        return OneBotAdapter(
+            access_token=creds.get("access_token") or None,
+            mode="reverse",
+            reverse_host=creds.get("reverse_host", "0.0.0.0"),
+            reverse_port=int(creds.get("reverse_port", 6700)),
             channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id,
         )
     elif bot_type == "qqbot":
@@ -731,6 +743,7 @@ async def start_im_channels(agent_or_master):
                 wework_ws = WeWorkWsAdapter(
                     bot_id=settings.wework_ws_bot_id,
                     secret=settings.wework_ws_secret,
+                    webhook_url=settings.wework_ws_webhook_url,
                 )
                 await _message_gateway.register_adapter(wework_ws)
                 adapters_started.append("wework_ws")
@@ -754,17 +767,21 @@ async def start_im_channels(agent_or_master):
             logger.error(f"Failed to start DingTalk adapter: {e}")
 
     # OneBot (通用协议)
-    if settings.onebot_enabled and settings.onebot_ws_url:
+    if settings.onebot_enabled:
         try:
             from .channels.adapters import OneBotAdapter
 
             onebot = OneBotAdapter(
+                mode=settings.onebot_mode,
                 ws_url=settings.onebot_ws_url,
+                reverse_host=settings.onebot_reverse_host,
+                reverse_port=settings.onebot_reverse_port,
                 access_token=settings.onebot_access_token or None,
             )
             await _message_gateway.register_adapter(onebot)
             adapters_started.append("onebot")
-            logger.info("OneBot adapter registered")
+            _mode_label = "reverse" if settings.onebot_mode == "reverse" else "forward"
+            logger.info(f"OneBot adapter registered (mode={_mode_label})")
         except Exception as e:
             logger.error(f"Failed to start OneBot adapter: {e}")
 
@@ -963,7 +980,9 @@ def show_channels():
         ("企业微信(HTTP)", settings.wework_enabled, settings.wework_corp_id),
         ("企业微信(WS)", settings.wework_ws_enabled, settings.wework_ws_bot_id),
         ("钉钉", settings.dingtalk_enabled, settings.dingtalk_client_id),
-        ("OneBot", settings.onebot_enabled, settings.onebot_ws_url),
+        ("OneBot", settings.onebot_enabled,
+         settings.onebot_ws_url if settings.onebot_mode == "forward"
+         else f"{settings.onebot_reverse_host}:{settings.onebot_reverse_port}"),
         ("QQ 官方机器人", settings.qqbot_enabled, settings.qqbot_app_id),
     ]
 

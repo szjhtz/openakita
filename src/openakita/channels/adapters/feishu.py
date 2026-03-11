@@ -571,7 +571,7 @@ class FeishuAdapter(ChannelAdapter):
         with self._events_lock:
             return self._important_events.pop(chat_id, [])
 
-    async def add_reaction(self, message_id: str, emoji_type: str = "DONE") -> None:
+    async def add_reaction(self, message_id: str, emoji_type: str = "OK") -> None:
         """给消息添加表情回复，用作「已读」回执替代"""
         if not self._client:
             return
@@ -598,7 +598,7 @@ class FeishuAdapter(ChannelAdapter):
 
     # ==================== 思考状态指示器 ====================
 
-    async def send_typing(self, chat_id: str) -> None:
+    async def send_typing(self, chat_id: str, thread_id: str | None = None) -> None:
         """发送"思考中..."占位卡片（首次调用时发送，后续调用跳过）。
 
         Gateway 的 _keep_typing 每 4 秒调用一次，仅第一次生成卡片。
@@ -607,7 +607,7 @@ class FeishuAdapter(ChannelAdapter):
             return
         if not self._client:
             return
-        reply_to = self._last_user_msg.pop(chat_id, None)
+        reply_to = self._last_user_msg.pop(chat_id, None) or thread_id
         card_msg_id = await self._send_thinking_card(chat_id, reply_to=reply_to)
         if card_msg_id:
             self._thinking_cards[chat_id] = card_msg_id

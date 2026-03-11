@@ -1067,6 +1067,8 @@ class LLMClient:
                         "reasoning_content is missing",  # 自愈失败后仍作为结构性错误
                         "missing reasoning_content",
                         "missing 'reasoning_content'",
+                        "data_inspection_failed",  # DashScope 内容审查拒绝
+                        "inappropriate content",   # DashScope 审查的错误描述文本
                     ]
                     is_non_retryable = any(
                         pattern in error_str.lower() for pattern in non_retryable_patterns
@@ -1085,6 +1087,8 @@ class LLMClient:
                             "maximum context length",
                             "too many tokens",
                             "string too long",
+                            "data_inspection",       # DashScope 内容安全审查（内容问题，非端点问题）
+                            "inappropriate content",  # 同上的描述文本
                         ]
                         _is_content_error = any(
                             p in error_str.lower() for p in _content_error_patterns

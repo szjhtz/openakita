@@ -32,7 +32,7 @@ import type {
 import {
   IconRefresh, IconCheck, IconCheckCircle, IconX, IconXCircle,
   IconChevronDown, IconChevronRight, IconChevronUp, IconGlobe,
-  IconEdit, IconTrash, IconEye, IconEyeOff, IconInfo, IconClipboard,
+  IconEdit, IconTrash, IconEye, IconEyeOff, IconInfo, IconClipboard, IconPower,
   DotGreen, DotGray, DotYellow, DotRed,
   LogoTelegram, LogoFeishu, LogoWework, LogoDingtalk, LogoQQ,
 } from "./icons";
@@ -212,9 +212,19 @@ export function App() {
 
   useEffect(() => {
     const onResize = () => {
-      const mobile = window.innerWidth <= 768;
+      const w = window.innerWidth;
+      const mobile = w <= 768;
       setIsMobile(mobile);
       if (!mobile) setMobileSidebarOpen(false);
+      if (!mobile && w <= 980) {
+        if (!sidebarAutoCollapsed.current) {
+          sidebarAutoCollapsed.current = true;
+          setSidebarCollapsed(true);
+        }
+      } else if (w > 980 && sidebarAutoCollapsed.current) {
+        sidebarAutoCollapsed.current = false;
+        setSidebarCollapsed(false);
+      }
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -240,6 +250,7 @@ export function App() {
   const [appInitializing, setAppInitializing] = useState(!(IS_WEB || IS_CAPACITOR));
   const [configExpanded, setConfigExpanded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarAutoCollapsed = useRef(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
@@ -547,7 +558,7 @@ export function App() {
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [endpointSummary, setEndpointSummary] = useState<
-    { name: string; provider: string; apiType: string; baseUrl: string; model: string; keyEnv: string; keyPresent: boolean }[]
+    { name: string; provider: string; apiType: string; baseUrl: string; model: string; keyEnv: string; keyPresent: boolean; enabled?: boolean }[]
   >([]);
   const [skillSummary, setSkillSummary] = useState<{ count: number; systemCount: number; externalCount: number } | null>(null);
   const [skillsDetail, setSkillsDetail] = useState<
@@ -695,6 +706,7 @@ export function App() {
                 context_window: Number(e?.context_window || 200000),
                 timeout: Number(e?.timeout || 180),
                 capabilities: Array.isArray(e?.capabilities) ? e.capabilities.map((x: any) => String(x)) : [],
+                enabled: e?.enabled !== false,
               })));
             }
           } catch { /* ignore */ }
@@ -1724,6 +1736,7 @@ export function App() {
             input_price: Number.isFinite(Number(t?.input_price)) ? Number(t.input_price) : 0,
             output_price: Number.isFinite(Number(t?.output_price)) ? Number(t.output_price) : 0,
           })) : undefined,
+          enabled: e?.enabled !== false,
         }))
         .filter((e: any) => e.name);
       list.sort((a, b) => a.priority - b.priority);
@@ -1752,6 +1765,7 @@ export function App() {
           timeout: Number.isFinite(Number(e.timeout)) ? Number(e.timeout) : 30,
           capabilities: Array.isArray(e.capabilities) ? e.capabilities.map((x: any) => String(x)) : ["text"],
           note: e.note ? String(e.note) : null,
+          enabled: e?.enabled !== false,
         }))
         .sort((a: EndpointDraft, b: EndpointDraft) => a.priority - b.priority);
       setSavedCompilerEndpoints(compilerEps);
@@ -1772,6 +1786,7 @@ export function App() {
           timeout: Number.isFinite(Number(e.timeout)) ? Number(e.timeout) : 60,
           capabilities: Array.isArray(e.capabilities) ? e.capabilities.map((x: any) => String(x)) : ["text"],
           note: e.note ? String(e.note) : null,
+          enabled: e?.enabled !== false,
         }))
         .sort((a: EndpointDraft, b: EndpointDraft) => a.priority - b.priority);
       setSavedSttEndpoints(sttEps);
@@ -1966,19 +1981,16 @@ export function App() {
   }
 
   /**
-   * 保存 .env 配置后触发服务重启，并轮询等待服务恢复。
-   * 如果服务未运行，仅保存不重启并提示。
+   * 纯重启：安装 IM 依赖 → 检测存活 → 触发重启 → 轮询恢复。
+   * 不含 env 保存逻辑，可独立调用（如 Bot 配置保存后重启）。
    */
-  async function applyAndRestart(keys: string[]): Promise<void> {
+  async function restartService(): Promise<void> {
     const base = httpApiBase();
     setError(null);
-    setRestartOverlay({ phase: "saving" });
+    setRestartOverlay({ phase: "restarting" });
 
     try {
-      // Step 1: 保存配置
-      await saveEnvKeys(keys);
-
-      // Step 1.5: 自动安装已启用 IM 通道缺失的依赖（非阻塞，失败不影响重启）
+      // 自动安装已启用 IM 通道缺失的依赖（非阻塞，失败不影响重启）
       if (IS_TAURI && venvDir && currentWorkspaceId) {
         try {
           await invoke("openakita_ensure_channel_deps", {
@@ -1988,7 +2000,7 @@ export function App() {
         } catch { /* 非关键步骤，失败不影响流程 */ }
       }
 
-      // Step 2: 检测服务是否运行
+      // 检测服务是否运行
       let alive = false;
       try {
         const ping = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) });
@@ -1996,7 +2008,6 @@ export function App() {
       } catch { alive = false; }
 
       if (!alive) {
-        // 服务未运行，仅保存
         setRestartOverlay({ phase: "notRunning" });
         setTimeout(() => {
           setRestartOverlay(null);
@@ -2005,29 +2016,23 @@ export function App() {
         return;
       }
 
-      // Step 3: 触发重启
+      // 触发重启
       setRestartOverlay({ phase: "restarting" });
       const wsId = currentWorkspaceId || workspaces[0]?.id;
 
       if (IS_TAURI && wsId && venvDir && dataMode === "local") {
         // ── Tauri 本地模式：进程级重启（杀旧进程 → 启新进程） ──
-        // 比 Python 进程内重启更可靠，不受 Windows asyncio / 端口 TIME_WAIT 影响。
-
-        // 3a. 优雅关闭服务
         try {
           const shutRes = await fetch(`${base}/api/shutdown`, { method: "POST", signal: AbortSignal.timeout(2000) });
           if (shutRes.ok) await new Promise((r) => setTimeout(r, 1000));
         } catch { /* 请求可能因服务关闭而失败 */ }
 
-        // 3b. PID 级别兜底确保进程退出
         try {
           await invoke("openakita_service_stop", { workspaceId: wsId });
         } catch { /* PID 文件可能不存在 */ }
 
-        // 3c. 等待旧服务完全关闭
         await waitForServiceDown(base, 15000);
 
-        // 3d. 启动新进程
         setRestartOverlay({ phase: "waiting" });
         try {
           const ss = await invoke<{ running: boolean; pid: number | null; pidFile: string }>(
@@ -2048,11 +2053,10 @@ export function App() {
           await fetch(`${base}/api/config/restart`, { method: "POST", signal: AbortSignal.timeout(3000) });
         } catch { /* 请求可能因服务关闭而失败 */ }
 
-        // 等待服务关闭
         await waitForServiceDown(base, 15000);
       }
 
-      // Step 4: 轮询等待服务恢复
+      // 轮询等待服务恢复
       setRestartOverlay({ phase: "waiting" });
       const maxWait = IS_TAURI ? 60_000 : 30_000;
       const pollInterval = 1000;
@@ -2096,6 +2100,23 @@ export function App() {
       setRestartOverlay(null);
       setError(String(e));
     }
+  }
+
+  /**
+   * 保存 .env 配置后触发服务重启，并轮询等待服务恢复。
+   * 如果服务未运行，仅保存不重启并提示。
+   */
+  async function applyAndRestart(keys: string[]): Promise<void> {
+    setError(null);
+    setRestartOverlay({ phase: "saving" });
+    try {
+      await saveEnvKeys(keys);
+    } catch (e) {
+      setRestartOverlay(null);
+      setError(String(e));
+      return;
+    }
+    await restartService();
   }
 
   function normalizePriority(n: any, fallback: number) {
@@ -2863,6 +2884,26 @@ export function App() {
     }
   }
 
+  async function doToggleEndpointEnabled(name: string, endpointType: "endpoints" | "compiler_endpoints" | "stt_endpoints" = "endpoints") {
+    if (!currentWorkspaceId && dataMode !== "remote") return;
+    try {
+      const raw = await readWorkspaceFile("data/llm_endpoints.json");
+      const base = raw ? JSON.parse(raw) : { endpoints: [], settings: {} };
+      const eps = Array.isArray(base[endpointType]) ? base[endpointType] : [];
+      for (const ep of eps) {
+        if (String(ep?.name || "") === name) {
+          ep.enabled = ep.enabled === false ? true : false;
+          break;
+        }
+      }
+      base[endpointType] = eps;
+      await writeWorkspaceFile("data/llm_endpoints.json", JSON.stringify(base, null, 2) + "\n");
+      loadSavedEndpoints().catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function saveEnvKeys(keys: string[]) {
     const entries: Record<string, string> = {};
     for (const k of keys) {
@@ -2936,7 +2977,7 @@ export function App() {
           "WEWORK_TOKEN", "WEWORK_ENCODING_AES_KEY", "WEWORK_CALLBACK_PORT", "WEWORK_CALLBACK_HOST",
           "WEWORK_MODE", "WEWORK_WS_ENABLED", "WEWORK_WS_BOT_ID", "WEWORK_WS_SECRET",
           "DINGTALK_ENABLED", "DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET",
-          "ONEBOT_ENABLED", "ONEBOT_WS_URL", "ONEBOT_ACCESS_TOKEN",
+          "ONEBOT_ENABLED", "ONEBOT_MODE", "ONEBOT_WS_URL", "ONEBOT_REVERSE_HOST", "ONEBOT_REVERSE_PORT", "ONEBOT_ACCESS_TOKEN",
           "QQBOT_ENABLED", "QQBOT_APP_ID", "QQBOT_APP_SECRET", "QQBOT_SANDBOX", "QQBOT_MODE", "QQBOT_WEBHOOK_PORT", "QQBOT_WEBHOOK_PATH",
         ];
       case "tools":
@@ -3154,6 +3195,7 @@ export function App() {
                 model: String(e?.model || ""),
                 keyEnv,
                 keyPresent,
+                enabled: e?.enabled !== false,
               };
             })
             .filter((e: any) => e.name);
@@ -3179,6 +3221,7 @@ export function App() {
               model: String(m?.model || ""),
               keyEnv: "",
               keyPresent: m?.has_api_key === true,
+              enabled: m?.enabled !== false,
             })).filter((e: any) => e.name);
             if (list.length > 0) {
               setEndpointSummary(list);
@@ -3209,6 +3252,7 @@ export function App() {
                 name: String(e?.name || ""), provider: String(e?.provider || ""),
                 apiType: String(e?.api_type || ""), baseUrl: String(e?.base_url || ""),
                 model: String(e?.model || ""), keyEnv, keyPresent,
+                enabled: e?.enabled !== false,
               };
             }).filter((e: any) => e.name);
             if (list.length > 0) {
@@ -3303,6 +3347,7 @@ export function App() {
             model: String(e?.model || ""),
             keyEnv,
             keyPresent,
+            enabled: e?.enabled !== false,
           };
         })
         .filter((e: any) => e.name);
@@ -3794,7 +3839,7 @@ export function App() {
       { k: "WEWORK_ENABLED", name: t("status.wework"), required: ["WEWORK_CORP_ID", "WEWORK_TOKEN", "WEWORK_ENCODING_AES_KEY"] },
       { k: "WEWORK_WS_ENABLED", name: t("status.weworkWs"), required: ["WEWORK_WS_BOT_ID", "WEWORK_WS_SECRET"] },
       { k: "DINGTALK_ENABLED", name: t("status.dingtalk"), required: ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"] },
-      { k: "ONEBOT_ENABLED", name: "OneBot", required: ["ONEBOT_WS_URL"] },
+      { k: "ONEBOT_ENABLED", name: "OneBot", required: [] },
       { k: "QQBOT_ENABLED", name: "QQ 机器人", required: ["QQBOT_APP_ID", "QQBOT_APP_SECRET"] },
     ];
     const imStatus = im.map((c) => {
@@ -4035,8 +4080,11 @@ export function App() {
                   ? h.status === "healthy" ? (h.latencyMs != null ? h.latencyMs + "ms" : "OK") : fullError.slice(0, 30) + (fullError.length > 30 ? "…" : "")
                   : e.keyPresent ? "—" : t("status.keyMissing");
                 return (
-                  <div key={e.name} className="epTableRow">
-                    <span className="epTableName">{e.name}</span>
+                  <div key={e.name} className="epTableRow" style={e.enabled === false ? { opacity: 0.45 } : undefined}>
+                    <span className="epTableName">
+                      {e.name}
+                      {e.enabled === false && <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>{t("llm.disabled")}</span>}
+                    </span>
                     <span className="epTableModel">{e.model}</span>
                     <span>{e.keyPresent ? <DotGreen /> : <DotGray />}</span>
                     <span style={{ display: "flex", alignItems: "center", gap: 4 }} title={fullError ? (t("status.clickToCopy", "点击复制") + ": " + fullError) : undefined}>
@@ -4182,15 +4230,17 @@ export function App() {
                 <span></span>
               </div>
               {savedEndpoints.map((e) => (
-                <div key={e.name} className="epTableRow">
+                <div key={e.name} className="epTableRow" style={e.enabled === false ? { opacity: 0.45 } : undefined}>
                   <span className="epTableName">
                     {e.name}
-                    {savedEndpoints[0]?.name === e.name && <span style={{ marginLeft: 6, color: "var(--brand)", fontSize: 10, fontWeight: 800 }}>{t("llm.primary")}</span>}
+                    {savedEndpoints[0]?.name === e.name && e.enabled !== false && <span style={{ marginLeft: 6, color: "var(--brand)", fontSize: 10, fontWeight: 800 }}>{t("llm.primary")}</span>}
+                    {e.enabled === false && <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>{t("llm.disabled")}</span>}
                   </span>
                   <span className="epTableModel">{e.model}</span>
                   <span>{(envDraft[e.api_key_env] || "").trim() ? <DotGreen /> : <DotGray />}</span>
                   <span style={{ fontSize: 12 }}>{e.priority}</span>
                   <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className={`btnIcon${e.enabled === false ? "" : " btnIconActive"}`} onClick={() => doToggleEndpointEnabled(e.name)} disabled={!!busy} title={e.enabled === false ? t("llm.enable") : t("llm.disable")}><IconPower size={14} /></button>
                     {savedEndpoints[0]?.name !== e.name && <button className="btnIcon" onClick={() => doSetPrimaryEndpoint(e.name)} disabled={!!busy} title={t("llm.setPrimary")}><IconChevronUp size={14} /></button>}
                     <button className="btnIcon" onClick={() => doStartEditEndpoint(e.name)} disabled={!!busy} title={t("llm.edit")}><IconEdit size={14} /></button>
                     <button className="btnIcon btnIconDanger" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></button>
@@ -4217,12 +4267,16 @@ export function App() {
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {savedCompilerEndpoints.map((e) => (
-                <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(0,0,0,0.04)" }}>
+                <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(0,0,0,0.04)", ...(e.enabled === false ? { opacity: 0.45 } : {}) }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 13 }}>{e.name}</span>
                     <span style={{ color: "var(--muted)", fontSize: 11, marginLeft: 8 }}>{e.model} · {e.provider}</span>
+                    {e.enabled === false && <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>{t("llm.disabled")}</span>}
                   </div>
-                  <button className="btnIcon btnIconDanger" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteCompilerEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></button>
+                  <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className={`btnIcon${e.enabled === false ? "" : " btnIconActive"}`} onClick={() => doToggleEndpointEnabled(e.name, "compiler_endpoints")} disabled={!!busy} title={e.enabled === false ? t("llm.enable") : t("llm.disable")}><IconPower size={14} /></button>
+                    <button className="btnIcon btnIconDanger" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteCompilerEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></button>
+                  </span>
                 </div>
               ))}
             </div>
@@ -4245,12 +4299,16 @@ export function App() {
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {savedSttEndpoints.map((e) => (
-                <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(0,0,0,0.04)" }}>
+                <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(0,0,0,0.04)", ...(e.enabled === false ? { opacity: 0.45 } : {}) }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 13 }}>{e.name}</span>
                     <span style={{ color: "var(--muted)", fontSize: 11, marginLeft: 8 }}>{e.model} · {e.provider}</span>
+                    {e.enabled === false && <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>{t("llm.disabled")}</span>}
                   </div>
-                  <button className="btnIcon btnIconDanger" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteSttEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></button>
+                  <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className={`btnIcon${e.enabled === false ? "" : " btnIconActive"}`} onClick={() => doToggleEndpointEnabled(e.name, "stt_endpoints")} disabled={!!busy} title={e.enabled === false ? t("llm.enable") : t("llm.disable")}><IconPower size={14} /></button>
+                    <button className="btnIcon btnIconDanger" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteSttEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></button>
+                  </span>
                 </div>
               ))}
             </div>
@@ -4274,6 +4332,7 @@ export function App() {
                   value={providerSlug}
                   onChange={(v) => setProviderSlug(v)}
                   options={providers.map((p) => ({ value: p.slug, label: p.name }))}
+                  extraOptions={[{ value: "__custom__", label: t("llm.customProvider") }]}
                   placeholder={providers.length === 0 ? t("common.loading") : undefined}
                   disabled={providers.length === 0}
                 />
@@ -5032,13 +5091,13 @@ export function App() {
   const _envBase = { envDraft, onEnvChange: setEnvDraft, busy };
   const _secretCtx = { secretShown, onToggleSecret: (k: string) => setSecretShown((m: Record<string, boolean>) => ({ ...m, [k]: !m[k] })) };
   const FT = (p: { k: string; label: string; placeholder?: string; help?: string; type?: "text" | "password" }) =>
-    <FieldText {...p} {..._envBase} {..._secretCtx} />;
+    <FieldText key={p.k} {...p} {..._envBase} {..._secretCtx} />;
   const FB = (p: { k: string; label: string; help?: string; defaultValue?: boolean }) =>
-    <FieldBool {...p} {..._envBase} />;
+    <FieldBool key={p.k} {...p} {..._envBase} />;
   const FS = (p: { k: string; label: string; options: { value: string; label: string }[]; help?: string }) =>
-    <FieldSelect {...p} {..._envBase} />;
+    <FieldSelect key={p.k} {...p} {..._envBase} />;
   const FC = (p: { k: string; label: string; options: { value: string; label: string }[]; placeholder?: string; help?: string }) =>
-    <FieldCombo {...p} {..._envBase} />;
+    <FieldCombo key={p.k} {...p} {..._envBase} />;
 
   async function renderIntegrationsSave(keys: string[], successText: string) {
     if (!currentWorkspaceId) { setError(t("common.error")); return; }
@@ -5099,22 +5158,22 @@ export function App() {
           <details className="configDetails" open>
             <summary>{t("config.toolsMCP")}</summary>
             <div className="configDetailsBody">
-              <FB k="MCP_ENABLED" label={t("config.toolsMCPEnable")} help={t("config.toolsMCPEnableHelp")} />
+              {FB({ k: "MCP_ENABLED", label: t("config.toolsMCPEnable"), help: t("config.toolsMCPEnableHelp") })}
               <div className="grid2">
-                <FB k="MCP_BROWSER_ENABLED" label="Browser MCP" help={t("config.toolsMCPBrowserHelp")} />
-                <FT k="MCP_TIMEOUT" label="Timeout (s)" placeholder="60" />
+                {FB({ k: "MCP_BROWSER_ENABLED", label: "Browser MCP", help: t("config.toolsMCPBrowserHelp") })}
+                {FT({ k: "MCP_TIMEOUT", label: "Timeout (s)", placeholder: "60" })}
               </div>
               <div className="divider" />
-              <FB k="MCP_MYSQL_ENABLED" label="MySQL" />
+              {FB({ k: "MCP_MYSQL_ENABLED", label: "MySQL" })}
               <div className="grid2">
-                <FT k="MCP_MYSQL_HOST" label="Host" placeholder="localhost" />
-                <FT k="MCP_MYSQL_USER" label="User" placeholder="root" />
-                <FT k="MCP_MYSQL_PASSWORD" label="Password" type="password" />
-                <FT k="MCP_MYSQL_DATABASE" label="Database" placeholder="mydb" />
+                {FT({ k: "MCP_MYSQL_HOST", label: "Host", placeholder: "localhost" })}
+                {FT({ k: "MCP_MYSQL_USER", label: "User", placeholder: "root" })}
+                {FT({ k: "MCP_MYSQL_PASSWORD", label: "Password", type: "password" })}
+                {FT({ k: "MCP_MYSQL_DATABASE", label: "Database", placeholder: "mydb" })}
               </div>
               <div className="divider" />
-              <FB k="MCP_POSTGRES_ENABLED" label="PostgreSQL" />
-              <FT k="MCP_POSTGRES_URL" label="URL" placeholder="postgresql://user:pass@localhost/db" />
+              {FB({ k: "MCP_POSTGRES_ENABLED", label: "PostgreSQL" })}
+              {FT({ k: "MCP_POSTGRES_URL", label: "URL", placeholder: "postgresql://user:pass@localhost/db" })}
             </div>
           </details>
 
@@ -5122,29 +5181,29 @@ export function App() {
           <details className="configDetails" open>
             <summary>{t("config.toolsDesktop")}</summary>
             <div className="configDetailsBody">
-              <FB k="DESKTOP_ENABLED" label={t("config.toolsDesktopEnable")} help={t("config.toolsDesktopHelp")} />
+              {FB({ k: "DESKTOP_ENABLED", label: t("config.toolsDesktopEnable"), help: t("config.toolsDesktopHelp") })}
               <div className="grid3">
-                <FT k="DESKTOP_DEFAULT_MONITOR" label={t("config.toolsMonitor")} placeholder="0" />
-                <FT k="DESKTOP_MAX_WIDTH" label={t("config.toolsMaxW")} placeholder="1920" />
-                <FT k="DESKTOP_MAX_HEIGHT" label={t("config.toolsMaxH")} placeholder="1080" />
+                {FT({ k: "DESKTOP_DEFAULT_MONITOR", label: t("config.toolsMonitor"), placeholder: "0" })}
+                {FT({ k: "DESKTOP_MAX_WIDTH", label: t("config.toolsMaxW"), placeholder: "1920" })}
+                {FT({ k: "DESKTOP_MAX_HEIGHT", label: t("config.toolsMaxH"), placeholder: "1080" })}
               </div>
               <details className="configDetails">
                 <summary>{t("config.toolsDesktopAdvanced")}</summary>
                 <div className="configDetailsBody">
                   <div className="grid3">
-                    <FT k="DESKTOP_COMPRESSION_QUALITY" label={t("config.toolsCompression")} placeholder="85" />
-                    <FT k="DESKTOP_CACHE_TTL" label="Cache TTL" placeholder="1.0" />
-                    <FB k="DESKTOP_FAILSAFE" label="Failsafe" />
+                    {FT({ k: "DESKTOP_COMPRESSION_QUALITY", label: t("config.toolsCompression"), placeholder: "85" })}
+                    {FT({ k: "DESKTOP_CACHE_TTL", label: "Cache TTL", placeholder: "1.0" })}
+                    {FB({ k: "DESKTOP_FAILSAFE", label: "Failsafe" })}
                   </div>
-                  <FB k="DESKTOP_VISION_ENABLED" label={t("config.toolsVision")} help={t("config.toolsVisionHelp")} />
+                  {FB({ k: "DESKTOP_VISION_ENABLED", label: t("config.toolsVision"), help: t("config.toolsVisionHelp") })}
                   <div className="grid2">
-                    <FT k="DESKTOP_VISION_MODEL" label={t("config.toolsVisionModel")} placeholder="qwen3-vl-plus" />
-                    <FT k="DESKTOP_VISION_OCR_MODEL" label="OCR" placeholder="qwen-vl-ocr" />
+                    {FT({ k: "DESKTOP_VISION_MODEL", label: t("config.toolsVisionModel"), placeholder: "qwen3-vl-plus" })}
+                    {FT({ k: "DESKTOP_VISION_OCR_MODEL", label: "OCR", placeholder: "qwen-vl-ocr" })}
                   </div>
                   <div className="grid3">
-                    <FT k="DESKTOP_CLICK_DELAY" label="Click Delay" placeholder="0.1" />
-                    <FT k="DESKTOP_TYPE_INTERVAL" label="Type Interval" placeholder="0.03" />
-                    <FT k="DESKTOP_MOVE_DURATION" label="Move Duration" placeholder="0.15" />
+                    {FT({ k: "DESKTOP_CLICK_DELAY", label: "Click Delay", placeholder: "0.1" })}
+                    {FT({ k: "DESKTOP_TYPE_INTERVAL", label: "Type Interval", placeholder: "0.03" })}
+                    {FT({ k: "DESKTOP_MOVE_DURATION", label: "Move Duration", placeholder: "0.15" })}
                   </div>
                 </div>
               </details>
@@ -5156,27 +5215,27 @@ export function App() {
             <summary>{t("config.toolsDownloadVoice")}</summary>
             <div className="configDetailsBody">
               <div className="grid2">
-                <FS k="MODEL_DOWNLOAD_SOURCE" label={t("config.agentDownloadSource")} options={[
+                {FS({ k: "MODEL_DOWNLOAD_SOURCE", label: t("config.agentDownloadSource"), options: [
                   { value: "auto", label: "Auto (自动选择最快源)" },
                   { value: "hf-mirror", label: "hf-mirror (国内镜像 🇨🇳)" },
                   { value: "modelscope", label: "ModelScope (魔搭社区 🇨🇳)" },
                   { value: "huggingface", label: "HuggingFace (官方)" },
-                ]} />
-                <FS k="WHISPER_LANGUAGE" label={t("config.toolsWhisperLang")} options={[
+                ] })}
+                {FS({ k: "WHISPER_LANGUAGE", label: t("config.toolsWhisperLang"), options: [
                   { value: "zh", label: "中文 (zh)" },
                   { value: "en", label: "English (en, .en model)" },
                   { value: "auto", label: "Auto (自动检测)" },
-                ]} />
+                ] })}
               </div>
               <div className="grid2">
-                <FC k="WHISPER_MODEL" label={t("config.toolsWhisperModel")} help={t("config.toolsWhisperHelp")} options={[
+                {FC({ k: "WHISPER_MODEL", label: t("config.toolsWhisperModel"), help: t("config.toolsWhisperHelp"), options: [
                   { value: "tiny", label: "tiny (~39MB)" },
                   { value: "base", label: "base (~74MB)" },
                   { value: "small", label: "small (~244MB)" },
                   { value: "medium", label: "medium (~769MB)" },
                   { value: "large", label: "large (~1.5GB)" },
-                ]} placeholder="base" />
-                <FT k="GITHUB_TOKEN" label="GitHub Token" placeholder="" type="password" help={t("config.toolsGithubHelp")} />
+                ], placeholder: "base" })}
+                {FT({ k: "GITHUB_TOKEN", label: "GitHub Token", placeholder: "", type: "password", help: t("config.toolsGithubHelp") })}
               </div>
             </div>
           </details>
@@ -5186,13 +5245,13 @@ export function App() {
             <summary>{t("config.toolsNetwork")}</summary>
             <div className="configDetailsBody">
               <div className="grid3">
-                <FT k="HTTP_PROXY" label="HTTP_PROXY" placeholder="http://127.0.0.1:7890" />
-                <FT k="HTTPS_PROXY" label="HTTPS_PROXY" placeholder="http://127.0.0.1:7890" />
-                <FT k="ALL_PROXY" label="ALL_PROXY" placeholder="socks5://..." />
+                {FT({ k: "HTTP_PROXY", label: "HTTP_PROXY", placeholder: "http://127.0.0.1:7890" })}
+                {FT({ k: "HTTPS_PROXY", label: "HTTPS_PROXY", placeholder: "http://127.0.0.1:7890" })}
+                {FT({ k: "ALL_PROXY", label: "ALL_PROXY", placeholder: "socks5://..." })}
               </div>
               <div className="grid2">
-                <FB k="FORCE_IPV4" label={t("config.toolsForceIPv4")} help={t("config.toolsForceIPv4Help")} />
-                <FT k="TOOL_MAX_PARALLEL" label={t("config.toolsParallel")} placeholder="1" help={t("config.toolsParallelHelp")} />
+                {FB({ k: "FORCE_IPV4", label: t("config.toolsForceIPv4"), help: t("config.toolsForceIPv4Help") })}
+                {FT({ k: "TOOL_MAX_PARALLEL", label: t("config.toolsParallel"), placeholder: "1", help: t("config.toolsParallelHelp") })}
               </div>
             </div>
           </details>
@@ -5202,7 +5261,7 @@ export function App() {
             <summary>{t("config.toolsOther")}</summary>
             <div className="configDetailsBody">
               <div className="grid2">
-                <FT k="FORCE_TOOL_CALL_MAX_RETRIES" label={t("config.toolsForceRetry")} placeholder="1" />
+                {FT({ k: "FORCE_TOOL_CALL_MAX_RETRIES", label: t("config.toolsForceRetry"), placeholder: "1" })}
               </div>
             </div>
           </details>
@@ -6089,7 +6148,10 @@ export function App() {
       "DINGTALK_CLIENT_ID",
       "DINGTALK_CLIENT_SECRET",
       "ONEBOT_ENABLED",
+      "ONEBOT_MODE",
       "ONEBOT_WS_URL",
+      "ONEBOT_REVERSE_HOST",
+      "ONEBOT_REVERSE_PORT",
       "ONEBOT_ACCESS_TOKEN",
       "QQBOT_ENABLED",
       "QQBOT_APP_ID",
@@ -6168,14 +6230,14 @@ export function App() {
               网络代理与并行
             </div>
             <div className="grid3">
-              <FT k="HTTP_PROXY" label="HTTP_PROXY" placeholder="http://127.0.0.1:7890" />
-              <FT k="HTTPS_PROXY" label="HTTPS_PROXY" placeholder="http://127.0.0.1:7890" />
-              <FT k="ALL_PROXY" label="ALL_PROXY" placeholder="socks5://127.0.0.1:1080" />
+              {FT({ k: "HTTP_PROXY", label: "HTTP_PROXY", placeholder: "http://127.0.0.1:7890" })}
+              {FT({ k: "HTTPS_PROXY", label: "HTTPS_PROXY", placeholder: "http://127.0.0.1:7890" })}
+              {FT({ k: "ALL_PROXY", label: "ALL_PROXY", placeholder: "socks5://127.0.0.1:1080" })}
             </div>
             <div className="grid3" style={{ marginTop: 10 }}>
-              <FB k="FORCE_IPV4" label="强制 IPv4" help="某些 VPN/IPv6 环境下有用" />
-              <FT k="TOOL_MAX_PARALLEL" label="TOOL_MAX_PARALLEL" placeholder="1" help="单轮多工具并行数（默认 1=串行）" />
-              <FT k="LOG_LEVEL" label="LOG_LEVEL" placeholder="INFO" help="DEBUG/INFO/WARNING/ERROR" />
+              {FB({ k: "FORCE_IPV4", label: "强制 IPv4", help: "某些 VPN/IPv6 环境下有用" })}
+              {FT({ k: "TOOL_MAX_PARALLEL", label: "TOOL_MAX_PARALLEL", placeholder: "1", help: "单轮多工具并行数（默认 1=串行）" })}
+              {FT({ k: "LOG_LEVEL", label: "LOG_LEVEL", placeholder: "INFO", help: "DEBUG/INFO/WARNING/ERROR" })}
             </div>
           </div>
 
@@ -6195,12 +6257,12 @@ export function App() {
                 apply: "https://t.me/BotFather",
                 body: (
                   <>
-                    <FT k="TELEGRAM_BOT_TOKEN" label="Bot Token" placeholder="从 BotFather 获取（仅会显示一次）" type="password" />
-                    <FT k="TELEGRAM_PROXY" label="代理（可选）" placeholder="http://127.0.0.1:7890 / socks5://..." />
-                    <FB k="TELEGRAM_REQUIRE_PAIRING" label={t("config.imPairing")} />
-                    <FT k="TELEGRAM_PAIRING_CODE" label={t("config.imPairingCode")} placeholder={t("config.imPairingCodeHint")} />
+                    {FT({ k: "TELEGRAM_BOT_TOKEN", label: "Bot Token", placeholder: "从 BotFather 获取（仅会显示一次）", type: "password" })}
+                    {FT({ k: "TELEGRAM_PROXY", label: "代理（可选）", placeholder: "http://127.0.0.1:7890 / socks5://..." })}
+                    {FB({ k: "TELEGRAM_REQUIRE_PAIRING", label: t("config.imPairing") })}
+                    {FT({ k: "TELEGRAM_PAIRING_CODE", label: t("config.imPairingCode"), placeholder: t("config.imPairingCodeHint") })}
                     <TelegramPairingCodeHint currentWorkspaceId={currentWorkspaceId} />
-                    <FT k="TELEGRAM_WEBHOOK_URL" label="Webhook URL" placeholder="https://..." />
+                    {FT({ k: "TELEGRAM_WEBHOOK_URL", label: "Webhook URL", placeholder: "https://..." })}
                   </>
                 ),
               },
@@ -6210,8 +6272,8 @@ export function App() {
                 apply: "https://open.feishu.cn/",
                 body: (
                   <>
-                    <FT k="FEISHU_APP_ID" label="App ID" placeholder="" />
-                    <FT k="FEISHU_APP_SECRET" label="App Secret" placeholder="" type="password" />
+                    {FT({ k: "FEISHU_APP_ID", label: "App ID", placeholder: "" })}
+                    {FT({ k: "FEISHU_APP_SECRET", label: "App Secret", placeholder: "", type: "password" })}
                   </>
                 ),
               },
@@ -6251,15 +6313,15 @@ export function App() {
                       </div>
                       {isWs ? (
                         <>
-                          <FT k="WEWORK_WS_BOT_ID" label={t("config.imWeworkBotId")} />
-                          <FT k="WEWORK_WS_SECRET" label={t("config.imWeworkSecret")} type="password" />
+                          {FT({ k: "WEWORK_WS_BOT_ID", label: t("config.imWeworkBotId") })}
+                          {FT({ k: "WEWORK_WS_SECRET", label: t("config.imWeworkSecret"), type: "password" })}
                         </>
                       ) : (
                         <>
-                          <FT k="WEWORK_CORP_ID" label="Corp ID" />
-                          <FT k="WEWORK_TOKEN" label="回调 Token" placeholder="在企业微信后台「接收消息」设置中获取" />
-                          <FT k="WEWORK_ENCODING_AES_KEY" label="EncodingAESKey" placeholder="在企业微信后台「接收消息」设置中获取" type="password" />
-                          <FT k="WEWORK_CALLBACK_PORT" label="回调端口" placeholder="9880" />
+                          {FT({ k: "WEWORK_CORP_ID", label: "Corp ID" })}
+                          {FT({ k: "WEWORK_TOKEN", label: "回调 Token", placeholder: "在企业微信后台「接收消息」设置中获取" })}
+                          {FT({ k: "WEWORK_ENCODING_AES_KEY", label: "EncodingAESKey", placeholder: "在企业微信后台「接收消息」设置中获取", type: "password" })}
+                          {FT({ k: "WEWORK_CALLBACK_PORT", label: "回调端口", placeholder: "9880" })}
                           <div style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0 0", lineHeight: 1.6 }}>
                             💡 企业微信后台「接收消息服务器配置」的 URL 请填：<code style={{ background: "#f5f5f5", padding: "1px 5px", borderRadius: 4, fontSize: 11 }}>http://your-domain:9880/callback</code>
                           </div>
@@ -6275,8 +6337,8 @@ export function App() {
                 apply: "https://open.dingtalk.com/",
                 body: (
                   <>
-                    <FT k="DINGTALK_CLIENT_ID" label="Client ID" />
-                    <FT k="DINGTALK_CLIENT_SECRET" label="Client Secret" type="password" />
+                    {FT({ k: "DINGTALK_CLIENT_ID", label: "Client ID" })}
+                    {FT({ k: "DINGTALK_CLIENT_SECRET", label: "Client Secret", type: "password" })}
                   </>
                 ),
               },
@@ -6286,9 +6348,9 @@ export function App() {
                 apply: "https://bot.q.qq.com/wiki/develop/api-v2/",
                 body: (
                   <>
-                    <FT k="QQBOT_APP_ID" label="AppID" placeholder="q.qq.com 开发设置" />
-                    <FT k="QQBOT_APP_SECRET" label="AppSecret" type="password" placeholder="q.qq.com 开发设置" />
-                    <FB k="QQBOT_SANDBOX" label={t("config.imQQBotSandbox")} />
+                    {FT({ k: "QQBOT_APP_ID", label: "AppID", placeholder: "q.qq.com 开发设置" })}
+                    {FT({ k: "QQBOT_APP_SECRET", label: "AppSecret", type: "password", placeholder: "q.qq.com 开发设置" })}
+                    {FB({ k: "QQBOT_SANDBOX", label: t("config.imQQBotSandbox") })}
                     <div style={{ marginTop: 8 }}>
                       <div className="label">{t("config.imQQBotMode")}</div>
                       <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
@@ -6305,24 +6367,48 @@ export function App() {
                     </div>
                     {(envDraft["QQBOT_MODE"] === "webhook") && (
                       <>
-                        <FT k="QQBOT_WEBHOOK_PORT" label={t("config.imQQBotWebhookPort")} placeholder="9890" />
-                        <FT k="QQBOT_WEBHOOK_PATH" label={t("config.imQQBotWebhookPath")} placeholder="/qqbot/callback" />
+                        {FT({ k: "QQBOT_WEBHOOK_PORT", label: t("config.imQQBotWebhookPort"), placeholder: "9890" })}
+                        {FT({ k: "QQBOT_WEBHOOK_PATH", label: t("config.imQQBotWebhookPath"), placeholder: "/qqbot/callback" })}
                       </>
                     )}
                   </>
                 ),
               },
-              {
-                title: "OneBot（需要 openakita[onebot] + NapCat/Lagrange）",
-                enabledKey: "ONEBOT_ENABLED",
-                apply: "https://github.com/botuniverse/onebot-11",
-                body: (
-                  <>
-                    <FT k="ONEBOT_WS_URL" label="WebSocket URL" placeholder="ws://127.0.0.1:8080" />
-                    <FT k="ONEBOT_ACCESS_TOKEN" label="Access Token" type="password" placeholder={t("config.imOneBotTokenHint")} />
-                  </>
-                ),
-              },
+              (() => {
+                const obMode = (envDraft["ONEBOT_MODE"] || "reverse") as "reverse" | "forward";
+                const isReverse = obMode === "reverse";
+                return {
+                  title: "OneBot（需要 openakita[onebot] + NapCat/Lagrange）",
+                  enabledKey: "ONEBOT_ENABLED",
+                  apply: "https://github.com/botuniverse/onebot-11",
+                  body: (
+                    <>
+                      <div style={{ marginBottom: 8 }}>
+                        <div className="label">{t("config.imOneBotMode")}</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                          {(["reverse", "forward"] as const).map((m) => (
+                            <button key={m} className={obMode === m ? "capChipActive" : "capChip"}
+                              onClick={() => setEnvDraft((d) => ({ ...d, ONEBOT_MODE: m }))}
+                            >{m === "reverse" ? t("config.imOneBotModeReverse") : t("config.imOneBotModeForward")}</button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                          {isReverse ? t("config.imOneBotModeReverseHint") : t("config.imOneBotModeForwardHint")}
+                        </div>
+                      </div>
+                      {isReverse ? (
+                        <>
+                          {FT({ k: "ONEBOT_REVERSE_HOST", label: t("config.imOneBotReverseHost"), placeholder: "0.0.0.0" })}
+                          {FT({ k: "ONEBOT_REVERSE_PORT", label: t("config.imOneBotReversePort"), placeholder: "6700" })}
+                        </>
+                      ) : (
+                        FT({ k: "ONEBOT_WS_URL", label: "WebSocket URL", placeholder: "ws://127.0.0.1:8080" })
+                      )}
+                      {FT({ k: "ONEBOT_ACCESS_TOKEN", label: "Access Token", type: "password", placeholder: t("config.imOneBotTokenHint") })}
+                    </>
+                  ),
+                };
+              })(),
             ].map((c) => {
               const enabled = envGet(envDraft, c.enabledKey, "false").toLowerCase() === "true";
               return (
@@ -6368,70 +6454,70 @@ export function App() {
                 <div className="label" style={{ marginBottom: 8 }}>
                   MCP
                 </div>
-                <FB k="MCP_ENABLED" label="启用 MCP" help="连接外部 MCP 服务/工具" />
+                {FB({ k: "MCP_ENABLED", label: "启用 MCP", help: "连接外部 MCP 服务/工具" })}
                 <div className="grid2" style={{ marginTop: 10 }}>
-                  <FB k="MCP_BROWSER_ENABLED" label="Browser MCP" help="Playwright 浏览器自动化" />
-                  <FT k="MCP_TIMEOUT" label="MCP_TIMEOUT" placeholder="60" />
+                  {FB({ k: "MCP_BROWSER_ENABLED", label: "Browser MCP", help: "Playwright 浏览器自动化" })}
+                  {FT({ k: "MCP_TIMEOUT", label: "MCP_TIMEOUT", placeholder: "60" })}
                 </div>
                 <div className="divider" />
-                <FB k="MCP_MYSQL_ENABLED" label="MySQL MCP" />
+                {FB({ k: "MCP_MYSQL_ENABLED", label: "MySQL MCP" })}
                 <div className="grid2" style={{ marginTop: 10 }}>
-                  <FT k="MCP_MYSQL_HOST" label="MCP_MYSQL_HOST" placeholder="localhost" />
-                  <FT k="MCP_MYSQL_USER" label="MCP_MYSQL_USER" placeholder="root" />
-                  <FT k="MCP_MYSQL_PASSWORD" label="MCP_MYSQL_PASSWORD" type="password" />
-                  <FT k="MCP_MYSQL_DATABASE" label="MCP_MYSQL_DATABASE" placeholder="mydb" />
+                  {FT({ k: "MCP_MYSQL_HOST", label: "MCP_MYSQL_HOST", placeholder: "localhost" })}
+                  {FT({ k: "MCP_MYSQL_USER", label: "MCP_MYSQL_USER", placeholder: "root" })}
+                  {FT({ k: "MCP_MYSQL_PASSWORD", label: "MCP_MYSQL_PASSWORD", type: "password" })}
+                  {FT({ k: "MCP_MYSQL_DATABASE", label: "MCP_MYSQL_DATABASE", placeholder: "mydb" })}
                 </div>
                 <div className="divider" />
-                <FB k="MCP_POSTGRES_ENABLED" label="Postgres MCP" />
-                <FT k="MCP_POSTGRES_URL" label="MCP_POSTGRES_URL" placeholder="postgresql://user:pass@localhost/db" />
+                {FB({ k: "MCP_POSTGRES_ENABLED", label: "Postgres MCP" })}
+                {FT({ k: "MCP_POSTGRES_URL", label: "MCP_POSTGRES_URL", placeholder: "postgresql://user:pass@localhost/db" })}
               </div>
 
               <div className="card" style={{ marginTop: 0 }}>
                 <div className="label" style={{ marginBottom: 8 }}>
                   桌面自动化（Windows）
                 </div>
-                <FB k="DESKTOP_ENABLED" label="启用桌面工具" help="启用/禁用桌面自动化工具集" />
+                {FB({ k: "DESKTOP_ENABLED", label: "启用桌面工具", help: "启用/禁用桌面自动化工具集" })}
                 <div className="divider" />
                 <div className="grid3">
-                  <FT k="DESKTOP_DEFAULT_MONITOR" label="默认显示器" placeholder="0" />
-                  <FT k="DESKTOP_MAX_WIDTH" label="最大宽" placeholder="1920" />
-                  <FT k="DESKTOP_MAX_HEIGHT" label="最大高" placeholder="1080" />
+                  {FT({ k: "DESKTOP_DEFAULT_MONITOR", label: "默认显示器", placeholder: "0" })}
+                  {FT({ k: "DESKTOP_MAX_WIDTH", label: "最大宽", placeholder: "1920" })}
+                  {FT({ k: "DESKTOP_MAX_HEIGHT", label: "最大高", placeholder: "1080" })}
                 </div>
                 <div className="grid3" style={{ marginTop: 10 }}>
-                  <FT k="DESKTOP_COMPRESSION_QUALITY" label="压缩质量" placeholder="85" />
-                  <FT k="DESKTOP_CACHE_TTL" label="截图缓存秒" placeholder="1.0" />
-                  <FB k="DESKTOP_FAILSAFE" label="failsafe" help="鼠标移到角落中止（PyAutoGUI 风格）" />
+                  {FT({ k: "DESKTOP_COMPRESSION_QUALITY", label: "压缩质量", placeholder: "85" })}
+                  {FT({ k: "DESKTOP_CACHE_TTL", label: "截图缓存秒", placeholder: "1.0" })}
+                  {FB({ k: "DESKTOP_FAILSAFE", label: "failsafe", help: "鼠标移到角落中止（PyAutoGUI 风格）" })}
                 </div>
                 <div className="divider" />
-                <FB k="DESKTOP_VISION_ENABLED" label="启用视觉" help="用于屏幕理解/定位" />
+                {FB({ k: "DESKTOP_VISION_ENABLED", label: "启用视觉", help: "用于屏幕理解/定位" })}
                 <div className="grid2" style={{ marginTop: 10 }}>
-                  <FT k="DESKTOP_VISION_MODEL" label="视觉模型" placeholder="qwen3-vl-plus" />
-                  <FT k="DESKTOP_VISION_OCR_MODEL" label="OCR 模型" placeholder="qwen-vl-ocr" />
+                  {FT({ k: "DESKTOP_VISION_MODEL", label: "视觉模型", placeholder: "qwen3-vl-plus" })}
+                  {FT({ k: "DESKTOP_VISION_OCR_MODEL", label: "OCR 模型", placeholder: "qwen-vl-ocr" })}
                 </div>
                 <div className="grid3" style={{ marginTop: 10 }}>
-                  <FT k="DESKTOP_CLICK_DELAY" label="click_delay" placeholder="0.1" />
-                  <FT k="DESKTOP_TYPE_INTERVAL" label="type_interval" placeholder="0.03" />
-                  <FT k="DESKTOP_MOVE_DURATION" label="move_duration" placeholder="0.15" />
+                  {FT({ k: "DESKTOP_CLICK_DELAY", label: "click_delay", placeholder: "0.1" })}
+                  {FT({ k: "DESKTOP_TYPE_INTERVAL", label: "type_interval", placeholder: "0.03" })}
+                  {FT({ k: "DESKTOP_MOVE_DURATION", label: "move_duration", placeholder: "0.15" })}
                 </div>
               </div>
             </div>
 
             <div className="divider" />
             <div className="grid3">
-              <FC k="WHISPER_MODEL" label="WHISPER_MODEL" help="tiny/base/small/medium/large" options={[
+              {FC({ k: "WHISPER_MODEL", label: "WHISPER_MODEL", help: "tiny/base/small/medium/large", options: [
                 { value: "tiny", label: "tiny (~39MB)" },
                 { value: "base", label: "base (~74MB)" },
                 { value: "small", label: "small (~244MB)" },
                 { value: "medium", label: "medium (~769MB)" },
                 { value: "large", label: "large (~1.5GB)" },
-              ]} placeholder="base" />
-              <FS k="WHISPER_LANGUAGE" label="WHISPER_LANGUAGE" options={[
+              ], placeholder: "base" })}
+              {FS({ k: "WHISPER_LANGUAGE", label: "WHISPER_LANGUAGE", options: [
                 { value: "zh", label: "中文 (zh)" },
                 { value: "en", label: "English (en)" },
                 { value: "auto", label: "Auto (自动检测)" },
-              ]} />
-              <FT k="GITHUB_TOKEN" label="GITHUB_TOKEN" placeholder="" type="password" help="用于搜索/下载技能" />
-              <FT k="DATABASE_PATH" label="DATABASE_PATH" placeholder="data/agent.db" />
+              ] })}
+              {FT({ k: "GITHUB_TOKEN", label: "GITHUB_TOKEN", placeholder: "", type: "password", help: "用于搜索/下载技能" })}
+              {FT({ k: "DATABASE_PATH", label: "DATABASE_PATH", placeholder: "data/agent.db" })}
             </div>
           </div>
 
@@ -6447,21 +6533,21 @@ export function App() {
             <details open>
               <summary style={{ cursor: "pointer", fontWeight: 800, padding: "8px 0" }}>基础</summary>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                <FT k="AGENT_NAME" label="Agent 名称" placeholder="OpenAkita" />
-                <FT k="MAX_ITERATIONS" label="最大迭代次数" placeholder="300" />
-                <FB k="AUTO_CONFIRM" label="自动确认（慎用）" help="打开后会减少交互确认，建议只在可信环境中使用" />
-                <FS k="THINKING_MODE" label="Thinking 模式" options={[
+                {FT({ k: "AGENT_NAME", label: "Agent 名称", placeholder: "OpenAkita" })}
+                {FT({ k: "MAX_ITERATIONS", label: "最大迭代次数", placeholder: "300" })}
+                {FB({ k: "AUTO_CONFIRM", label: "自动确认（慎用）", help: "打开后会减少交互确认，建议只在可信环境中使用" })}
+                {FS({ k: "THINKING_MODE", label: "Thinking 模式", options: [
                   { value: "auto", label: "auto (自动判断)" },
                   { value: "always", label: "always (始终思考)" },
                   { value: "never", label: "never (从不思考)" },
-                ]} />
-                <FT k="DATABASE_PATH" label="数据库路径" placeholder="data/agent.db" />
-                <FS k="LOG_LEVEL" label="日志级别" options={[
+                ] })}
+                {FT({ k: "DATABASE_PATH", label: "数据库路径", placeholder: "data/agent.db" })}
+                {FS({ k: "LOG_LEVEL", label: "日志级别", options: [
                   { value: "DEBUG", label: "DEBUG" },
                   { value: "INFO", label: "INFO" },
                   { value: "WARNING", label: "WARNING" },
                   { value: "ERROR", label: "ERROR" },
-                ]} />
+                ] })}
               </div>
             </details>
 
@@ -6469,14 +6555,14 @@ export function App() {
             <details>
               <summary style={{ cursor: "pointer", fontWeight: 800, padding: "8px 0" }}>日志高级</summary>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                <FT k="LOG_DIR" label="日志目录" placeholder="logs" />
-                <FT k="LOG_FILE_PREFIX" label="日志文件前缀" placeholder="openakita" />
-                <FT k="LOG_MAX_SIZE_MB" label="单文件最大 MB" placeholder="10" />
-                <FT k="LOG_BACKUP_COUNT" label="备份文件数" placeholder="30" />
-                <FT k="LOG_RETENTION_DAYS" label="保留天数" placeholder="30" />
-                <FT k="LOG_FORMAT" label="日志格式" placeholder="%(asctime)s - %(name)s - %(levelname)s - %(message)s" />
-                <FB k="LOG_TO_CONSOLE" label="输出到控制台" help="默认 true" />
-                <FB k="LOG_TO_FILE" label="输出到文件" help="默认 true" />
+                {FT({ k: "LOG_DIR", label: "日志目录", placeholder: "logs" })}
+                {FT({ k: "LOG_FILE_PREFIX", label: "日志文件前缀", placeholder: "openakita" })}
+                {FT({ k: "LOG_MAX_SIZE_MB", label: "单文件最大 MB", placeholder: "10" })}
+                {FT({ k: "LOG_BACKUP_COUNT", label: "备份文件数", placeholder: "30" })}
+                {FT({ k: "LOG_RETENTION_DAYS", label: "保留天数", placeholder: "30" })}
+                {FT({ k: "LOG_FORMAT", label: "日志格式", placeholder: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" })}
+                {FB({ k: "LOG_TO_CONSOLE", label: "输出到控制台", help: "默认 true" })}
+                {FB({ k: "LOG_TO_FILE", label: "输出到文件", help: "默认 true" })}
               </div>
             </details>
 
@@ -6484,17 +6570,17 @@ export function App() {
             <details>
               <summary style={{ cursor: "pointer", fontWeight: 800, padding: "8px 0" }}>记忆与 Embedding</summary>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                <FT k="EMBEDDING_MODEL" label="Embedding 模型" placeholder="shibing624/text2vec-base-chinese" />
-                <FT k="EMBEDDING_DEVICE" label="Embedding 设备" placeholder="cpu / cuda" />
-                <FS k="MODEL_DOWNLOAD_SOURCE" label="模型下载源" options={[
+                {FT({ k: "EMBEDDING_MODEL", label: "Embedding 模型", placeholder: "shibing624/text2vec-base-chinese" })}
+                {FT({ k: "EMBEDDING_DEVICE", label: "Embedding 设备", placeholder: "cpu / cuda" })}
+                {FS({ k: "MODEL_DOWNLOAD_SOURCE", label: "模型下载源", options: [
                   { value: "auto", label: "Auto (自动选择)" },
                   { value: "hf-mirror", label: "hf-mirror (国内镜像)" },
                   { value: "modelscope", label: "ModelScope (魔搭)" },
                   { value: "huggingface", label: "HuggingFace (官方)" },
-                ]} />
-                <FT k="MEMORY_HISTORY_DAYS" label="历史保留天数" placeholder="30" />
-                <FT k="MEMORY_MAX_HISTORY_FILES" label="最大历史文件数" placeholder="1000" />
-                <FT k="MEMORY_MAX_HISTORY_SIZE_MB" label="最大历史大小（MB）" placeholder="500" />
+                ] })}
+                {FT({ k: "MEMORY_HISTORY_DAYS", label: "历史保留天数", placeholder: "30" })}
+                {FT({ k: "MEMORY_MAX_HISTORY_FILES", label: "最大历史文件数", placeholder: "1000" })}
+                {FT({ k: "MEMORY_MAX_HISTORY_SIZE_MB", label: "最大历史大小（MB）", placeholder: "500" })}
               </div>
             </details>
 
@@ -6502,9 +6588,9 @@ export function App() {
             <details>
               <summary style={{ cursor: "pointer", fontWeight: 800, padding: "8px 0" }}>会话</summary>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                <FT k="SESSION_TIMEOUT_MINUTES" label="会话超时（分钟）" placeholder="30" />
-                <FT k="SESSION_MAX_HISTORY" label="会话最大历史条数" placeholder="50" />
-                <FT k="SESSION_STORAGE_PATH" label="会话存储路径" placeholder="data/sessions" />
+                {FT({ k: "SESSION_TIMEOUT_MINUTES", label: "会话超时（分钟）", placeholder: "30" })}
+                {FT({ k: "SESSION_MAX_HISTORY", label: "会话最大历史条数", placeholder: "50" })}
+                {FT({ k: "SESSION_STORAGE_PATH", label: "会话存储路径", placeholder: "data/sessions" })}
               </div>
             </details>
 
@@ -6521,9 +6607,9 @@ export function App() {
                   />
                   启用定时任务调度器（推荐）
                 </label>
-                <FT k="SCHEDULER_TIMEZONE" label="时区" placeholder="Asia/Shanghai" />
-                <FT k="SCHEDULER_MAX_CONCURRENT" label="最大并发任务数" placeholder="5" />
-                <FT k="SCHEDULER_TASK_TIMEOUT" label="任务超时（秒）" placeholder="600" />
+                {FT({ k: "SCHEDULER_TIMEZONE", label: "时区", placeholder: "Asia/Shanghai" })}
+                {FT({ k: "SCHEDULER_MAX_CONCURRENT", label: "最大并发任务数", placeholder: "5" })}
+                {FT({ k: "SCHEDULER_TASK_TIMEOUT", label: "任务超时（秒）", placeholder: "600" })}
               </div>
             </details>
 
@@ -6550,31 +6636,33 @@ export function App() {
     );
   }
 
-  // 构造端点摘要（供 ChatView 使用）
+  // 构造端点摘要（供 ChatView 使用，仅启用的端点）
   const chatEndpoints: EndpointSummaryType[] = useMemo(() =>
-    endpointSummary.map((e) => {
-      const h = endpointHealth[e.name];
-      return {
-        name: e.name,
-        provider: e.provider,
-        apiType: e.apiType,
-        baseUrl: e.baseUrl,
-        model: e.model,
-        keyEnv: e.keyEnv,
-        keyPresent: e.keyPresent,
-        health: h ? {
+    endpointSummary
+      .filter((e) => e.enabled !== false)
+      .map((e) => {
+        const h = endpointHealth[e.name];
+        return {
           name: e.name,
-          status: h.status as "healthy" | "degraded" | "unhealthy" | "unknown",
-          latencyMs: h.latencyMs,
-          error: h.error,
-          errorCategory: h.errorCategory,
-          consecutiveFailures: h.consecutiveFailures,
-          cooldownRemaining: h.cooldownRemaining,
-          isExtendedCooldown: h.isExtendedCooldown,
-          lastCheckedAt: h.lastCheckedAt,
-        } : undefined,
-      };
-    }),
+          provider: e.provider,
+          apiType: e.apiType,
+          baseUrl: e.baseUrl,
+          model: e.model,
+          keyEnv: e.keyEnv,
+          keyPresent: e.keyPresent,
+          health: h ? {
+            name: e.name,
+            status: h.status as "healthy" | "degraded" | "unhealthy" | "unknown",
+            latencyMs: h.latencyMs,
+            error: h.error,
+            errorCategory: h.errorCategory,
+            consecutiveFailures: h.consecutiveFailures,
+            cooldownRemaining: h.cooldownRemaining,
+            isExtendedCooldown: h.isExtendedCooldown,
+            lastCheckedAt: h.lastCheckedAt,
+          } : undefined,
+        };
+      }),
     [endpointSummary, endpointHealth],
   );
 
@@ -7650,7 +7738,7 @@ export function App() {
               <p style={{ color: "#94a3b8", fontSize: 15 }}>此模块已禁用，点击上方开关启用</p>
             </div>
           ) : (
-            <IMView serviceRunning={serviceStatus?.running ?? false} multiAgentEnabled={multiAgentEnabled} apiBaseUrl={apiBaseUrl} />
+            <IMView serviceRunning={serviceStatus?.running ?? false} multiAgentEnabled={multiAgentEnabled} apiBaseUrl={apiBaseUrl} onRequestRestart={restartService} />
           )}
         </div>
       );
@@ -8044,8 +8132,7 @@ export function App() {
         mobileOpen={mobileSidebarOpen}
         configExpanded={configExpanded}
         onToggleConfig={() => {
-          if (sidebarCollapsed) { setView("wizard"); setConfigExpanded(true); }
-          else if (view !== "wizard") { setView("wizard"); setConfigExpanded(true); }
+          if (sidebarCollapsed) { setSidebarCollapsed(false); setConfigExpanded(true); }
           else { setConfigExpanded((v) => !v); }
         }}
         steps={steps}

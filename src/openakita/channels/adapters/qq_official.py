@@ -128,6 +128,10 @@ class QQBotAdapter(ChannelAdapter):
         self._last_msg_id: dict[str, str] = {}
         # {chat_id: msg_seq} — QQ API 要求同一 msg_id 的多条回复递增 msg_seq 避免去重
         self._msg_seq: dict[str, int] = {}
+        # {chat_id: message_id} — "正在思考中..."提示消息 ID（send_typing 发出，clear_typing 撤回）
+        self._typing_msg_ids: dict[str, str] = {}
+        # Markdown 能力是否可用（自定义 markdown 需内邀开通，首次失败后自动降级）
+        self._markdown_available: bool = True
 
     def _remember_chat(self, chat_id: str, chat_type: str, msg_id: str = "") -> None:
         """记录 chat_id 的路由信息（收到消息时调用）"""
@@ -855,20 +859,38 @@ class QQBotAdapter(ChannelAdapter):
 
     # ==================== 消息发送 ====================
 
+    @staticmethod
+    def _has_markdown_features(text: str) -> bool:
+        """检测文本是否包含 Markdown 格式特征"""
+        markers = ("**", "##", "- ", "```", "~~", "[", "](", "> ", "---")
+        return any(m in text for m in markers)
+
+    def _should_try_markdown(self, parse_mode: str | None, text: str) -> bool:
+        """判断是否应尝试以 Markdown 格式发送"""
+        if not self._markdown_available:
+            return False
+        if not text:
+            return False
+        return parse_mode == "markdown" and self._has_markdown_features(text)
+
     async def send_message(self, message: OutgoingMessage) -> str:
         """
         发送消息
 
         支持:
         - 文本消息 (msg_type=0)
+        - Markdown 消息 (msg_type=2, 需内邀开通，失败自动降级)
         - 图片消息 (频道: content+image/file_image; 群/C2C: 两步富媒体上传)
         """
         chat_type = self._resolve_chat_type(message.chat_id, message.metadata)
         msg_id = self._resolve_msg_id(message.chat_id, message.metadata)
+        parse_mode = message.parse_mode
 
         # Webhook 模式使用 HTTP API 发送
         if self.mode == "webhook":
-            return await self._send_message_via_http(message, chat_type, msg_id)
+            return await self._send_message_via_http(
+                message, chat_type, msg_id, parse_mode,
+            )
 
         if not self._client or not self._client.api:
             raise RuntimeError("QQ Official Bot not started")
@@ -891,21 +913,31 @@ class QQBotAdapter(ChannelAdapter):
         try:
             if chat_type == "channel":
                 return await self._send_channel_message(
-                    api, message.chat_id, text, image_url, image_path, msg_id,
+                    api, message.chat_id, text, image_url, image_path,
+                    msg_id, parse_mode,
                 )
             else:
                 return await self._send_group_or_c2c_message(
                     api, chat_type, message.chat_id,
-                    text, image_url, image_path, msg_id,
+                    text, image_url, image_path, msg_id, parse_mode,
                 )
         except Exception as e:
             logger.error(f"Failed to send QQ Official Bot message: {e}")
             raise
 
     async def _send_message_via_http(
-        self, message: OutgoingMessage, chat_type: str, msg_id: str | None,
+        self,
+        message: OutgoingMessage,
+        chat_type: str,
+        msg_id: str | None,
+        parse_mode: str | None = None,
     ) -> str:
-        """Webhook 模式：通过 HTTP API 发送消息"""
+        """Webhook 模式：通过 HTTP API 发送消息（文本/Markdown，不支持富媒体）"""
+        if message.content.images:
+            raise NotImplementedError(
+                "QQ 官方机器人 Webhook 模式暂不支持发送图片，请切换到 WebSocket 模式"
+            )
+
         try:
             import httpx as hx
         except ImportError:
@@ -925,20 +957,45 @@ class QQBotAdapter(ChannelAdapter):
         text = message.content.text or ""
         target_id = message.chat_id
 
+        if chat_type == "group":
+            url = f"/v2/groups/{target_id}/messages"
+        elif chat_type == "c2c":
+            url = f"/v2/users/{target_id}/messages"
+        elif chat_type == "channel":
+            url = f"/channels/{target_id}/messages"
+        else:
+            url = f"/v2/groups/{target_id}/messages"
+
         async with hx.AsyncClient(base_url=base_url, headers=headers) as client:
-            body: dict[str, Any] = {"msg_type": 0, "content": text}
+            # 尝试 Markdown 发送
+            if self._should_try_markdown(parse_mode, text):
+                md_body: dict[str, Any] = {
+                    "msg_type": 2,
+                    "markdown": {"content": text},
+                    "msg_seq": self._next_msg_seq(target_id),
+                }
+                if msg_id:
+                    md_body["msg_id"] = msg_id
+                try:
+                    resp = await client.post(url, json=md_body)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return str(data.get("id", ""))
+                except Exception as e:
+                    self._markdown_available = False
+                    logger.warning(
+                        "QQ Markdown 发送失败，已降级为纯文本（后续消息将跳过 Markdown）: %s",
+                        e,
+                    )
+
+            # 纯文本发送
+            body: dict[str, Any] = {
+                "msg_type": 0,
+                "content": text,
+                "msg_seq": self._next_msg_seq(target_id),
+            }
             if msg_id:
                 body["msg_id"] = msg_id
-            body["msg_seq"] = self._next_msg_seq(target_id)
-
-            if chat_type == "group":
-                url = f"/v2/groups/{target_id}/messages"
-            elif chat_type == "c2c":
-                url = f"/v2/users/{target_id}/messages"
-            elif chat_type == "channel":
-                url = f"/channels/{target_id}/messages"
-            else:
-                url = f"/v2/groups/{target_id}/messages"
 
             resp = await client.post(url, json=body)
             resp.raise_for_status()
@@ -953,8 +1010,26 @@ class QQBotAdapter(ChannelAdapter):
         image_url: str | None,
         image_path: str | None,
         msg_id: str | None,
+        parse_mode: str | None = None,
     ) -> str:
-        """频道消息：支持 content + image/file_image 在同一条消息中"""
+        """频道消息：支持 content + image/file_image 在同一条消息中，支持 Markdown"""
+        # 尝试 Markdown 发送（仅纯文本时，有图片时走普通消息）
+        if self._should_try_markdown(parse_mode, text) and not image_url and not image_path:
+            try:
+                md_kwargs: dict[str, Any] = {
+                    "channel_id": channel_id,
+                    "msg_id": msg_id,
+                    "msg_type": 2,
+                    "markdown": {"content": text},
+                }
+                result = await api.post_message(**md_kwargs)
+                return str(getattr(result, "id", ""))
+            except Exception as e:
+                self._markdown_available = False
+                logger.warning(
+                    "QQ 频道 Markdown 发送失败，已降级为纯文本: %s", e,
+                )
+
         kwargs: dict[str, Any] = {
             "channel_id": channel_id,
             "msg_id": msg_id,
@@ -979,23 +1054,45 @@ class QQBotAdapter(ChannelAdapter):
         image_url: str | None,
         image_path: str | None,
         msg_id: str | None,
+        parse_mode: str | None = None,
     ) -> str:
         """
         群聊 / C2C 消息发送。
 
         QQ 官方 API 群/C2C 不支持文本+图片同时发送，需要分两条消息:
-        1. 文本消息 (msg_type=0)
+        1. 文本消息 (msg_type=0) 或 Markdown (msg_type=2)
         2. 图片通过富媒体 API 两步上传后发送 (msg_type=7)
         """
+        if image_path and not image_url:
+            raise NotImplementedError(
+                "QQ 官方机器人群/C2C 图片发送需要公网可访问的 URL，不支持本地文件路径"
+            )
+
         result_id = ""
 
-        # 发送文本
+        # 发送文本（优先尝试 Markdown）
         if text:
-            result = await self._send_to_target(
-                api, chat_type, target_id,
-                msg_type=0, content=text, msg_id=msg_id,
-            )
-            result_id = str(getattr(result, "id", ""))
+            sent_as_md = False
+            if self._should_try_markdown(parse_mode, text):
+                try:
+                    result = await self._send_to_target(
+                        api, chat_type, target_id,
+                        msg_type=2, markdown={"content": text}, msg_id=msg_id,
+                    )
+                    result_id = str(getattr(result, "id", ""))
+                    sent_as_md = True
+                except Exception as e:
+                    self._markdown_available = False
+                    logger.warning(
+                        "QQ 群/C2C Markdown 发送失败，已降级为纯文本: %s", e,
+                    )
+
+            if not sent_as_md:
+                result = await self._send_to_target(
+                    api, chat_type, target_id,
+                    msg_type=0, content=text, msg_id=msg_id,
+                )
+                result_id = str(getattr(result, "id", ""))
 
         # 发送图片（需要公网 URL）
         # 本地图片自动转公网 URL（需要配置 public_api_url）
@@ -1011,7 +1108,7 @@ class QQBotAdapter(ChannelAdapter):
             try:
                 media_id = await self._send_rich_media(
                     api, chat_type, target_id,
-                    file_type=1,  # 图片
+                    file_type=1,
                     url=image_url,
                     msg_id=msg_id,
                 )
@@ -1057,30 +1154,9 @@ class QQBotAdapter(ChannelAdapter):
         发送文件
 
         注意: QQ 官方 API 的 file_type=4 (文件) 暂未开放。
-        当前实现会记录警告并 fallback 到发送文本提示。
         """
-        logger.warning(
-            f"QQ Official Bot: send_file not supported "
-            f"(file_type=4 暂未开放). file_path={file_path}"
-        )
-
-        # Fallback: 发送文本提示
-        if caption and self._client and self._client.api:
-            chat_type = self._resolve_chat_type(chat_id)
-            msg_id = self._resolve_msg_id(chat_id)
-            try:
-                api = self._client.api
-                result = await self._send_to_target(
-                    api, chat_type, chat_id,
-                    msg_type=0, content=f"{caption}\n[文件: {Path(file_path).name}]",
-                    msg_id=msg_id,
-                )
-                return str(getattr(result, "id", ""))
-            except Exception as e:
-                logger.warning(f"Fallback text send also failed: {e}")
-
         raise NotImplementedError(
-            "QQ Official Bot file sending (file_type=4) is not yet available"
+            "QQ 官方机器人暂不支持发送文件（file_type=4 API 未开放）"
         )
 
     async def send_voice(
@@ -1093,31 +1169,138 @@ class QQBotAdapter(ChannelAdapter):
         发送语音消息
 
         QQ 官方 API 语音 (file_type=3) 仅支持 silk 格式且需要公网 URL。
-        本地文件暂无法直接上传 (file_data 暂未支持)。
+        本地文件暂无法直接上传。
         """
-        logger.warning(
-            f"QQ Official Bot: send_voice requires public URL + silk format. "
-            f"Local file upload not supported. voice_path={voice_path}"
+        raise NotImplementedError(
+            "QQ 官方机器人暂不支持发送语音（需要公网 URL + silk 格式，本地文件不支持）"
         )
 
-        # 如果有 caption，发送文本提示
-        if caption and self._client and self._client.api:
-            chat_type = self._resolve_chat_type(chat_id)
-            msg_id = self._resolve_msg_id(chat_id)
-            try:
-                api = self._client.api
+    # ==================== Typing 提示 ====================
+
+    async def send_typing(self, chat_id: str, thread_id: str | None = None) -> None:
+        """发送"正在思考中..."提示消息（QQ 官方无 typing API，用文本消息替代）。
+
+        幂等：同一 chat_id 只发一次，后续调用（_keep_typing 循环）直接跳过。
+        """
+        if chat_id in self._typing_msg_ids:
+            return
+
+        # 立即占位，防止 _keep_typing 循环在 await 期间重入
+        self._typing_msg_ids[chat_id] = ""
+
+        chat_type = self._resolve_chat_type(chat_id)
+        msg_id = self._resolve_msg_id(chat_id)
+
+        try:
+            if self.mode == "webhook":
+                sent_id = await self._send_typing_via_http(chat_id, chat_type, msg_id)
+            else:
+                if not self._client or not self._client.api:
+                    return
                 result = await self._send_to_target(
-                    api, chat_type, chat_id,
-                    msg_type=0, content=f"{caption}\n[语音消息]",
+                    self._client.api, chat_type, chat_id,
+                    msg_type=0, content="正在思考中...",
                     msg_id=msg_id,
                 )
-                return str(getattr(result, "id", ""))
-            except Exception as e:
-                logger.warning(f"Fallback text send also failed: {e}")
+                sent_id = str(getattr(result, "id", ""))
 
-        raise NotImplementedError(
-            "QQ Official Bot voice sending requires public URL in silk format"
+            if sent_id:
+                self._typing_msg_ids[chat_id] = sent_id
+        except Exception as e:
+            logger.debug(f"QQ Official Bot: send_typing failed: {e}")
+
+    async def _send_typing_via_http(
+        self, chat_id: str, chat_type: str, msg_id: str | None,
+    ) -> str:
+        """Webhook 模式下通过 HTTP API 发送思考提示"""
+        try:
+            import httpx as hx
+        except ImportError:
+            return ""
+
+        token = await self._get_access_token()
+        base_url = (
+            "https://sandbox.api.sgroup.qq.com"
+            if self.sandbox
+            else "https://api.sgroup.qq.com"
         )
+        headers = {
+            "Authorization": f"QQBotToken {self.app_id}.{token}",
+            "Content-Type": "application/json",
+        }
+
+        body: dict[str, Any] = {"msg_type": 0, "content": "正在思考中..."}
+        if msg_id:
+            body["msg_id"] = msg_id
+        body["msg_seq"] = self._next_msg_seq(chat_id)
+
+        if chat_type == "group":
+            url = f"/v2/groups/{chat_id}/messages"
+        elif chat_type == "c2c":
+            url = f"/v2/users/{chat_id}/messages"
+        else:
+            url = f"/channels/{chat_id}/messages"
+
+        async with hx.AsyncClient(base_url=base_url, headers=headers) as client:
+            resp = await client.post(url, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            return str(data.get("id", ""))
+
+    async def clear_typing(self, chat_id: str, thread_id: str | None = None) -> None:
+        """撤回之前发送的"正在思考中..."消息（2 分钟内有效）"""
+        sent_id = self._typing_msg_ids.pop(chat_id, None)
+        if not sent_id:
+            return
+
+        chat_type = self._resolve_chat_type(chat_id)
+
+        try:
+            if self.mode == "webhook":
+                await self._recall_message_via_http(chat_id, chat_type, sent_id)
+            elif self._client and self._client.api:
+                api = self._client.api
+                if chat_type == "group":
+                    await api.recall_group_message(
+                        group_openid=chat_id, message_id=sent_id,
+                    )
+                elif chat_type == "c2c":
+                    await api.recall_c2c_message(
+                        openid=chat_id, message_id=sent_id,
+                    )
+                elif chat_type == "channel":
+                    await api.recall_message(
+                        channel_id=chat_id, message_id=sent_id,
+                    )
+        except Exception as e:
+            logger.debug(f"QQ Official Bot: clear_typing (recall) failed: {e}")
+
+    async def _recall_message_via_http(
+        self, chat_id: str, chat_type: str, message_id: str,
+    ) -> None:
+        """Webhook 模式下通过 HTTP API 撤回消息"""
+        try:
+            import httpx as hx
+        except ImportError:
+            return
+
+        token = await self._get_access_token()
+        base_url = (
+            "https://sandbox.api.sgroup.qq.com"
+            if self.sandbox
+            else "https://api.sgroup.qq.com"
+        )
+        headers = {"Authorization": f"QQBotToken {self.app_id}.{token}"}
+
+        if chat_type == "group":
+            url = f"/v2/groups/{chat_id}/messages/{message_id}"
+        elif chat_type == "c2c":
+            url = f"/v2/users/{chat_id}/messages/{message_id}"
+        else:
+            url = f"/channels/{chat_id}/messages/{message_id}"
+
+        async with hx.AsyncClient(base_url=base_url, headers=headers) as client:
+            await client.delete(url)
 
     # ==================== 媒体下载/上传 ====================
 
