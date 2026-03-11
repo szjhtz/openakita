@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -86,6 +85,28 @@ class InboxPriority(str, Enum):
     ACTION = "action"
     APPROVAL = "approval"
     ALERT = "alert"
+
+
+class ProjectType(str, Enum):
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+
+
+class ProjectStatus(str, Enum):
+    PLANNING = "planning"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+
+
+class TaskStatus(str, Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DELIVERED = "delivered"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -626,3 +647,101 @@ class InboxMessage:
             except ValueError:
                 d["priority"] = InboxPriority.INFO
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+# ---------------------------------------------------------------------------
+# Project / Task tracking
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProjectTask:
+    id: str = field(default_factory=lambda: _new_id("task_"))
+    project_id: str = ""
+    title: str = ""
+    description: str = ""
+    status: TaskStatus = TaskStatus.TODO
+    assignee_node_id: str | None = None
+    delegated_by: str | None = None
+    chain_id: str | None = None
+    priority: int = 0
+    progress_pct: int = 0
+    created_at: str = field(default_factory=_now_iso)
+    started_at: str | None = None
+    delivered_at: str | None = None
+    completed_at: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status.value,
+            "assignee_node_id": self.assignee_node_id,
+            "delegated_by": self.delegated_by,
+            "chain_id": self.chain_id,
+            "priority": self.priority,
+            "progress_pct": self.progress_pct,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "delivered_at": self.delivered_at,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ProjectTask:
+        d = dict(d)
+        if "status" in d and isinstance(d["status"], str):
+            try:
+                d["status"] = TaskStatus(d["status"])
+            except ValueError:
+                d["status"] = TaskStatus.TODO
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class OrgProject:
+    id: str = field(default_factory=lambda: _new_id("proj_"))
+    org_id: str = ""
+    name: str = ""
+    description: str = ""
+    project_type: ProjectType = ProjectType.TEMPORARY
+    status: ProjectStatus = ProjectStatus.PLANNING
+    owner_node_id: str | None = None
+    tasks: list[ProjectTask] = field(default_factory=list)
+    created_at: str = field(default_factory=_now_iso)
+    updated_at: str = field(default_factory=_now_iso)
+    completed_at: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "name": self.name,
+            "description": self.description,
+            "project_type": self.project_type.value,
+            "status": self.status.value,
+            "owner_node_id": self.owner_node_id,
+            "tasks": [t.to_dict() for t in self.tasks],
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> OrgProject:
+        d = dict(d)
+        if "project_type" in d and isinstance(d["project_type"], str):
+            try:
+                d["project_type"] = ProjectType(d["project_type"])
+            except ValueError:
+                d["project_type"] = ProjectType.TEMPORARY
+        if "status" in d and isinstance(d["status"], str):
+            try:
+                d["status"] = ProjectStatus(d["status"])
+            except ValueError:
+                d["status"] = ProjectStatus.PLANNING
+        raw_tasks = d.pop("tasks", [])
+        proj = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        proj.tasks = [ProjectTask.from_dict(t) for t in raw_tasks]
+        return proj

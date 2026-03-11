@@ -108,6 +108,57 @@ class OrgToolHandler:
                 args["filename"] = v
         return args
 
+    def _link_project_task(
+        self, org_id: str, chain_id: str, *,
+        title: str = "",
+        assignee: str | None = None,
+        delegated_by: str | None = None,
+        status: str | None = None,
+    ) -> None:
+        """Auto-link a task chain to an active project's ProjectTask."""
+        try:
+            from openakita.orgs.project_store import ProjectStore
+            from openakita.orgs.models import ProjectTask, TaskStatus
+
+            mgr = self._runtime._manager
+            org_dir = mgr._org_dir(org_id)
+            store = ProjectStore(org_dir)
+            existing = store.find_task_by_chain(chain_id)
+            if existing:
+                updates: dict[str, Any] = {}
+                if status:
+                    updates["status"] = TaskStatus(status)
+                    if status == "in_progress" and not existing.started_at:
+                        updates["started_at"] = _now_iso()
+                    elif status == "delivered":
+                        updates["delivered_at"] = _now_iso()
+                    elif status == "accepted":
+                        updates["completed_at"] = _now_iso()
+                if updates:
+                    store.update_task(existing.project_id, existing.id, updates)
+                return
+            if not title:
+                return
+            active_projects = [
+                p for p in store.list_projects()
+                if p.status.value == "active" and p.org_id == org_id
+            ]
+            if not active_projects:
+                return
+            proj = active_projects[0]
+            task = ProjectTask(
+                project_id=proj.id,
+                title=title[:120],
+                status=TaskStatus.IN_PROGRESS,
+                assignee_node_id=assignee,
+                delegated_by=delegated_by,
+                chain_id=chain_id,
+                started_at=_now_iso(),
+            )
+            store.add_task(proj.id, task)
+        except Exception as exc:
+            logger.debug("project-task auto-link failed: %s", exc)
+
     async def handle(
         self, tool_name: str, arguments: dict, org_id: str, node_id: str
     ) -> str:
@@ -251,6 +302,13 @@ class OrgToolHandler:
             "org_id": org_id, "from_node": node_id, "to_node": to_node,
             "task": args["task"][:120], "chain_id": chain_id,
         })
+        self._link_project_task(
+            org_id, chain_id,
+            title=args["task"][:120],
+            assignee=to_node,
+            delegated_by=node_id,
+            status="in_progress",
+        )
         return f"任务已分配给 {to_node}（chain: {chain_id[:12]}）: {args['task'][:50]}"
 
     async def _handle_org_escalate(
@@ -702,6 +760,7 @@ class OrgToolHandler:
                 "org_id": org_id, "from_node": node_id, "to_node": to_node,
                 "chain_id": chain_id, "summary": summary[:120],
             })
+            self._link_project_task(org_id, chain_id, status="delivered")
             return f"交付物已提交给 {to_node}，等待验收。"
         return "提交失败"
 
@@ -743,6 +802,8 @@ class OrgToolHandler:
             "org_id": org_id, "from_node": from_node, "accepted_by": node_id,
             "chain_id": chain_id, "feedback": feedback[:120],
         })
+        if chain_id:
+            self._link_project_task(org_id, chain_id, status="accepted")
 
         bb = self._runtime.get_blackboard(org_id)
         if bb:
@@ -790,6 +851,8 @@ class OrgToolHandler:
             "org_id": org_id, "from_node": from_node, "rejected_by": node_id,
             "chain_id": chain_id, "reason": reason[:120],
         })
+        if chain_id:
+            self._link_project_task(org_id, chain_id, status="rejected")
 
         return f"已打回 {from_node} 的交付物，原因：{reason[:50]}"
 

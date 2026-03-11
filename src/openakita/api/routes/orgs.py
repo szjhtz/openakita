@@ -6,9 +6,11 @@ CRUD + 模板 + 节点管理 + 生命周期 + 命令 + 记忆 + 事件
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
+import uuid
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/orgs", tags=["组织编排"])
 
 _VALID_DECISIONS = {"approve", "reject", "批准", "拒绝"}
+
+# In-memory store for async command tracking.
+# Keys are command_id (str), values are dicts with status/result/progress.
+_command_store: dict[str, dict[str, Any]] = {}
+_CMD_TTL = 3600  # purge commands older than 1 hour
 
 
 def _safe_int(value: str | None, default: int) -> int:
@@ -403,21 +410,89 @@ async def reset_org(request: Request, org_id: str):
         raise HTTPException(400, str(e))
 
 
-# ---- User commands ----
+# ---- User commands (async) ----
+
+
+def _purge_old_commands() -> None:
+    """Remove finished commands older than _CMD_TTL."""
+    now = time.time()
+    stale = [
+        cid for cid, cmd in _command_store.items()
+        if cmd["status"] in ("done", "error") and now - cmd["created_at"] > _CMD_TTL
+    ]
+    for cid in stale:
+        _command_store.pop(cid, None)
+
 
 @router.post("/{org_id}/command")
 async def send_command(request: Request, org_id: str):
+    """Submit a command to the organization. Returns immediately with a
+    command_id that the frontend can use to poll for progress / result."""
     rt = _get_runtime(request)
     body = await request.json()
     content = body.get("content", "")
     target_node = body.get("target_node_id")
     if not content:
         raise HTTPException(400, "content is required")
-    try:
-        result = await to_engine(rt.send_command(org_id, target_node, content))
-        return result
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+
+    _purge_old_commands()
+
+    command_id = uuid.uuid4().hex[:12]
+    _command_store[command_id] = {
+        "command_id": command_id,
+        "org_id": org_id,
+        "status": "running",
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+    async def _run() -> None:
+        from openakita.api.routes.websocket import broadcast_event
+        try:
+            result = await rt.send_command(org_id, target_node, content)
+            _command_store[command_id].update(
+                status="done", result=result, updated_at=time.time()
+            )
+            await broadcast_event("org:command_done", {
+                "org_id": org_id,
+                "command_id": command_id,
+                "result": result,
+            })
+        except Exception as exc:
+            _command_store[command_id].update(
+                status="error", error=str(exc), updated_at=time.time()
+            )
+            await broadcast_event("org:command_done", {
+                "org_id": org_id,
+                "command_id": command_id,
+                "error": str(exc),
+            })
+
+    from openakita.core.engine_bridge import get_engine_loop
+    engine_loop = get_engine_loop()
+    if engine_loop is not None:
+        asyncio.run_coroutine_threadsafe(_run(), engine_loop)
+    else:
+        asyncio.create_task(_run())
+
+    return {"command_id": command_id, "status": "running"}
+
+
+@router.get("/{org_id}/commands/{command_id}")
+async def get_command_status(request: Request, org_id: str, command_id: str):
+    """Poll the status of an async command."""
+    cmd = _command_store.get(command_id)
+    if not cmd or cmd["org_id"] != org_id:
+        raise HTTPException(404, "Command not found")
+    return {
+        "command_id": cmd["command_id"],
+        "status": cmd["status"],
+        "result": cmd["result"],
+        "error": cmd["error"],
+        "elapsed_s": round(time.time() - cmd["created_at"], 1),
+    }
 
 
 @router.post("/{org_id}/broadcast")
@@ -1242,6 +1317,47 @@ async def get_org_stats(request: Request, org_id: str):
     elif len(anomalies) > 0:
         health = "attention"
 
+    # Aggregate recent task flow from event store
+    recent_tasks: list[dict] = []
+    try:
+        es = rt.get_event_store(org_id)
+        task_events = es.query(limit=30)
+        for evt in task_events:
+            et = evt.get("event_type", "")
+            if et not in (
+                "task_delegated", "task_delivered", "task_accepted",
+                "task_rejected", "task_timeout",
+            ):
+                continue
+            d = evt.get("data", {})
+            recent_tasks.append({
+                "t": evt.get("timestamp"),
+                "type": et,
+                "from": d.get("from_node") or evt.get("actor", ""),
+                "to": d.get("to_node", ""),
+                "task": (d.get("task") or d.get("content") or "")[:80],
+                "status": (
+                    "accepted" if et == "task_accepted"
+                    else "rejected" if et == "task_rejected"
+                    else "timeout" if et == "task_timeout"
+                    else "delivered" if et == "task_delivered"
+                    else "running"
+                ),
+            })
+        recent_tasks = recent_tasks[:15]
+    except Exception:
+        pass
+
+    # Department workload (count busy + recent tasks per department)
+    dept_workload: dict[str, dict[str, int]] = {}
+    for n in org.nodes:
+        dep = n.department or "未分组"
+        if dep not in dept_workload:
+            dept_workload[dep] = {"total": 0, "busy": 0}
+        dept_workload[dep]["total"] += 1
+        if n.status.value == "busy":
+            dept_workload[dep]["busy"] += 1
+
     return {
         "org_id": org.id,
         "name": org.name,
@@ -1261,7 +1377,145 @@ async def get_org_stats(request: Request, org_id: str):
         "per_node": per_node,
         "anomalies": anomalies,
         "recent_blackboard": recent_bb,
+        "recent_tasks": recent_tasks,
+        "department_workload": dept_workload,
     }
+
+
+# ---- Project Board API ----
+
+_project_stores: dict[str, Any] = {}
+
+
+def _get_project_store(request: Request, org_id: str, *, must_exist: bool = False):
+    from openakita.orgs.project_store import ProjectStore
+    if must_exist:
+        mgr = _get_manager(request)
+        if not mgr.get(org_id):
+            raise HTTPException(404, "Organization not found")
+    if org_id not in _project_stores:
+        mgr = _get_manager(request)
+        org_dir = mgr._org_dir(org_id)
+        _project_stores[org_id] = ProjectStore(org_dir)
+    return _project_stores[org_id]
+
+
+@router.get("/{org_id}/projects")
+async def list_projects(request: Request, org_id: str):
+    store = _get_project_store(request, org_id)
+    return [p.to_dict() for p in store.list_projects()]
+
+
+@router.post("/{org_id}/projects")
+async def create_project(request: Request, org_id: str):
+    from openakita.orgs.models import OrgProject, ProjectType, ProjectStatus
+    body = await request.json()
+    proj = OrgProject(
+        org_id=org_id,
+        name=body.get("name", ""),
+        description=body.get("description", ""),
+        project_type=ProjectType(body.get("project_type", "temporary")),
+        status=ProjectStatus(body.get("status", "planning")),
+        owner_node_id=body.get("owner_node_id"),
+    )
+    store = _get_project_store(request, org_id, must_exist=True)
+    return store.create_project(proj).to_dict()
+
+
+@router.get("/{org_id}/projects/{project_id}")
+async def get_project(request: Request, org_id: str, project_id: str):
+    store = _get_project_store(request, org_id)
+    proj = store.get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    return proj.to_dict()
+
+
+@router.put("/{org_id}/projects/{project_id}")
+async def update_project(request: Request, org_id: str, project_id: str):
+    body = await request.json()
+    store = _get_project_store(request, org_id)
+    from openakita.orgs.models import ProjectStatus, ProjectType
+    updates: dict[str, Any] = {}
+    for key in ("name", "description", "owner_node_id", "completed_at"):
+        if key in body:
+            updates[key] = body[key]
+    if "status" in body:
+        updates["status"] = ProjectStatus(body["status"])
+    if "project_type" in body:
+        updates["project_type"] = ProjectType(body["project_type"])
+    proj = store.update_project(project_id, updates)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    return proj.to_dict()
+
+
+@router.delete("/{org_id}/projects/{project_id}")
+async def delete_project(request: Request, org_id: str, project_id: str):
+    store = _get_project_store(request, org_id)
+    if not store.delete_project(project_id):
+        raise HTTPException(404, "Project not found")
+    return {"ok": True}
+
+
+@router.post("/{org_id}/projects/{project_id}/tasks")
+async def create_task(request: Request, org_id: str, project_id: str):
+    from openakita.orgs.models import ProjectTask, TaskStatus
+    body = await request.json()
+    task = ProjectTask(
+        project_id=project_id,
+        title=body.get("title", ""),
+        description=body.get("description", ""),
+        status=TaskStatus(body.get("status", "todo")),
+        assignee_node_id=body.get("assignee_node_id"),
+        delegated_by=body.get("delegated_by"),
+        chain_id=body.get("chain_id"),
+        priority=body.get("priority", 0),
+    )
+    store = _get_project_store(request, org_id)
+    result = store.add_task(project_id, task)
+    if not result:
+        raise HTTPException(404, "Project not found")
+    return result.to_dict()
+
+
+@router.put("/{org_id}/projects/{project_id}/tasks/{task_id}")
+async def update_task(request: Request, org_id: str, project_id: str, task_id: str):
+    from openakita.orgs.models import TaskStatus
+    body = await request.json()
+    updates: dict[str, Any] = {}
+    for key in (
+        "title", "description", "assignee_node_id", "delegated_by",
+        "chain_id", "priority", "progress_pct",
+        "started_at", "delivered_at", "completed_at",
+    ):
+        if key in body:
+            updates[key] = body[key]
+    if "status" in body:
+        updates["status"] = TaskStatus(body["status"])
+    store = _get_project_store(request, org_id)
+    task = store.update_task(project_id, task_id, updates)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return task.to_dict()
+
+
+@router.delete("/{org_id}/projects/{project_id}/tasks/{task_id}")
+async def delete_task(request: Request, org_id: str, project_id: str, task_id: str):
+    store = _get_project_store(request, org_id)
+    if not store.delete_task(project_id, task_id):
+        raise HTTPException(404, "Task not found")
+    return {"ok": True}
+
+
+@router.get("/{org_id}/tasks")
+async def list_all_tasks(request: Request, org_id: str):
+    """Cross-project task aggregation with filters."""
+    store = _get_project_store(request, org_id)
+    status = request.query_params.get("status")
+    assignee = request.query_params.get("assignee")
+    chain_id = request.query_params.get("chain_id")
+    return store.all_tasks(status=status, assignee=assignee, chain_id=chain_id)
 
 
 # =====================================================================

@@ -60,6 +60,9 @@ import { openPopupWindow, canOpenPopupWindow, IS_CAPACITOR } from "../platform";
 import { OrgInboxSidebar } from "../components/OrgInboxSidebar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { OrgAvatar, AVATAR_PRESETS, AVATAR_MAP } from "../components/OrgAvatars";
+import { OrgChatPanel } from "../components/OrgChatPanel";
+import { OrgDashboard } from "../components/OrgDashboard";
+import { OrgProjectBoard } from "../components/OrgProjectBoard";
 
 // ── Time helpers (always show local timezone) ──
 
@@ -587,7 +590,7 @@ export function OrgEditorView({
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showNewNodeForm, setShowNewNodeForm] = useState(false);
-  const [propsTab, setPropsTab] = useState<"basic" | "identity" | "capabilities" | "advanced" | "live">("basic");
+  const [propsTab, setPropsTab] = useState<"basic" | "identity" | "capabilities" | "advanced" | "live" | "chat">("basic");
   const [fullPromptPreview, setFullPromptPreview] = useState<string | null>(null);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
   const [liveMode, setLiveMode] = useState(true);
@@ -611,6 +614,8 @@ export function OrgEditorView({
   type ActivityEvent = { id: string; time: number; event: string; data: any };
   const [activityFeed, setActivityFeed] = useState<ActivityEvent[]>([]);
   const [showActivityFeed, setShowActivityFeed] = useState(true);
+  const [bottomTab, setBottomTab] = useState<"activity" | "chat">("activity");
+  const [viewMode, setViewMode] = useState<"canvas" | "dashboard" | "projects">("canvas");
   const activityFeedRef = useRef<HTMLDivElement>(null);
   const [edgeAnimations, setEdgeAnimations] = useState<Record<string, { color: string; ts: number }>>({});
   const [edgeFlowCounts, setEdgeFlowCounts] = useState<Record<string, number>>({});
@@ -1385,6 +1390,18 @@ export function OrgEditorView({
             >
               <IconSitemap size={12} /> {!isMobile && "布局"}
             </button>
+            <button
+              className="btnSmall"
+              onClick={() => setViewMode(viewMode === "canvas" ? "dashboard" : viewMode === "dashboard" ? "projects" : "canvas")}
+              style={{
+                fontWeight: viewMode !== "canvas" ? 600 : 400,
+                color: viewMode === "dashboard" ? "#8b5cf6" : viewMode === "projects" ? "#f59e0b" : undefined,
+                background: viewMode === "dashboard" ? "rgba(139,92,246,0.1)" : viewMode === "projects" ? "rgba(245,158,11,0.1)" : undefined,
+              }}
+              title={viewMode === "canvas" ? "运营看板" : viewMode === "dashboard" ? "项目看板" : "画布视图"}
+            >
+              <IconClipboard size={12} /> {!isMobile && (viewMode === "canvas" ? "看板" : viewMode === "dashboard" ? "项目" : "画布")}
+            </button>
             {currentOrg && (
               <>
                 <div style={{ width: 1, height: 20, background: "var(--line)" }} />
@@ -1693,9 +1710,36 @@ export function OrgEditorView({
           </div>
         )}
 
-        {/* React Flow canvas */}
+        {/* Main content: Canvas / Dashboard / Projects */}
         {currentOrg ? (
           <>
+          {viewMode === "dashboard" ? (
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <OrgDashboard
+                orgId={currentOrg.id}
+                apiBaseUrl={apiBaseUrl}
+                orgName={currentOrg.name}
+                onNodeClick={(nodeId) => {
+                  setViewMode("canvas");
+                  const n = nodes.find(nd => nd.id === nodeId);
+                  if (n) {
+                    setSelectedNodeId(nodeId);
+                    setSelectedEdgeId(null);
+                    setShowRightPanel(true);
+                    if (liveMode) setPropsTab("live");
+                  }
+                }}
+              />
+            </div>
+          ) : viewMode === "projects" ? (
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <OrgProjectBoard
+                orgId={currentOrg.id}
+                apiBaseUrl={apiBaseUrl}
+                nodes={nodes.map(n => ({ id: n.id, role_title: (n.data as any)?.role_title, avatar: (n.data as any)?.avatar }))}
+              />
+            </div>
+          ) : (
           <div style={{ flex: 1 }}>
             <ReactFlow
               nodes={nodes}
@@ -1757,20 +1801,39 @@ export function OrgEditorView({
               )}
             </ReactFlow>
           </div>
+          )}
 
-          {/* Activity Feed Panel */}
+          {/* Bottom Panel: Activity Feed + Org Chat */}
           {liveMode && showActivityFeed && (
             <div style={{
-              height: 160, borderTop: "1px solid var(--line)", background: "var(--bg-app)",
-              overflowY: "auto", flexShrink: 0, fontSize: 11,
-            }} ref={activityFeedRef}>
-              <div style={{ padding: "6px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--line)", position: "sticky", top: 0, background: "var(--bg-app)", zIndex: 1 }}>
-                <span style={{ fontWeight: 600, fontSize: 11 }}>实时活动</span>
+              height: 200, borderTop: "1px solid var(--line)", background: "var(--bg-app)",
+              flexShrink: 0, fontSize: 11, display: "flex", flexDirection: "column",
+            }}>
+              {/* Bottom panel tab bar */}
+              <div style={{ padding: "0 10px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--line)", background: "var(--bg-app)", zIndex: 1, flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 0 }}>
+                  {(["activity", "chat"] as const).map(tab => (
+                    <button key={tab} className="btnSmall" onClick={() => setBottomTab(tab)} style={{
+                      fontSize: 11, fontWeight: bottomTab === tab ? 600 : 400, padding: "6px 12px",
+                      borderBottom: bottomTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+                      color: bottomTab === tab ? "var(--accent)" : "var(--muted)",
+                      background: "transparent", border: "none", borderRadius: 0, cursor: "pointer",
+                    }}>
+                      {tab === "activity" ? "活动流" : "组织对话"}
+                    </button>
+                  ))}
+                </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button className="btnSmall" onClick={() => setActivityFeed([])} style={{ fontSize: 10 }}>清空</button>
+                  {bottomTab === "activity" && (
+                    <button className="btnSmall" onClick={() => setActivityFeed([])} style={{ fontSize: 10 }}>清空</button>
+                  )}
                   <button className="btnSmall" onClick={() => setShowActivityFeed(false)} style={{ fontSize: 10 }}><IconX size={10} /></button>
                 </div>
               </div>
+
+              {/* Activity tab */}
+              {bottomTab === "activity" && (
+              <div style={{ flex: 1, overflowY: "auto" }} ref={activityFeedRef}>
               {activityFeed.length === 0 ? (
                 <div style={{ padding: 12, color: "var(--muted)", textAlign: "center" }}>等待活动...</div>
               ) : (
@@ -1849,6 +1912,20 @@ export function OrgEditorView({
                   );
                 })
               )}
+              </div>
+              )}
+
+              {/* Chat tab */}
+              {bottomTab === "chat" && selectedOrgId && (
+                <div style={{ flex: 1, overflow: "hidden" }}>
+                  <OrgChatPanel orgId={selectedOrgId} apiBaseUrl={apiBaseUrl} compact />
+                </div>
+              )}
+              {bottomTab === "chat" && !selectedOrgId && (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
+                  请先选择一个组织
+                </div>
+              )}
             </div>
           )}
           </>
@@ -1906,7 +1983,7 @@ export function OrgEditorView({
           {/* Tabs */}
           <div style={{ display: "flex", borderBottom: "1px solid var(--line)" }}>
             {(liveMode
-              ? (["live", "basic", "identity", "capabilities", "advanced"] as const)
+              ? (["live", "chat", "basic", "identity", "capabilities", "advanced"] as const)
               : (["basic", "identity", "capabilities", "advanced"] as const)
             ).map((tab) => (
               <button
@@ -1926,7 +2003,7 @@ export function OrgEditorView({
                   cursor: "pointer",
                 }}
               >
-                {tab === "live" ? "实况" : tab === "basic" ? "基本" : tab === "identity" ? "身份" : tab === "capabilities" ? "能力" : "高级"}
+                {tab === "live" ? "实况" : tab === "chat" ? "对话" : tab === "basic" ? "基本" : tab === "identity" ? "身份" : tab === "capabilities" ? "能力" : "高级"}
               </button>
             ))}
           </div>
@@ -3181,6 +3258,17 @@ export function OrgEditorView({
                     style={{ fontSize: 12, width: "100%" }}
                   />
                 </div>
+              </div>
+            )}
+
+            {propsTab === "chat" && liveMode && selectedOrgId && (
+              <div style={{ height: 360 }}>
+                <OrgChatPanel
+                  orgId={selectedOrgId}
+                  nodeId={selectedNodeId}
+                  apiBaseUrl={apiBaseUrl}
+                  compact
+                />
               </div>
             )}
           </div>

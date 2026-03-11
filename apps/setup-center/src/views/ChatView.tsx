@@ -2740,22 +2740,83 @@ export function ChatView({
         });
 
         try {
-          const res = await safeFetch(`${apiBaseUrl}/api/orgs/${targetOrgId}/command`, {
+          const submitRes = await safeFetch(`${apiBaseUrl}/api/orgs/${targetOrgId}/command`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content: msgContent, target_node_id: targetNodeId }),
-            signal: AbortSignal.timeout(300_000),
           });
-          const data = await res.json();
-          const resultText = data.result || data.error || JSON.stringify(data);
-          const progressSummary = progressLines.length > 0
-            ? progressLines.map(l => `> ${l}`).join("\n") + "\n\n---\n\n"
-            : "";
-          updateOrgMessages((prev) => prev.map(m =>
-            m.id === placeholderId
-              ? { ...m, content: `${progressSummary}**[${orgOrgName}]** ${resultText}`, streaming: false }
-              : m
-          ));
+          const submitData = await submitRes.json();
+          const commandId = submitData.command_id as string | undefined;
+
+          if (!commandId) {
+            const resultText = submitData.result || submitData.error || JSON.stringify(submitData);
+            const progressSummary = progressLines.length > 0
+              ? progressLines.map(l => `> ${l}`).join("\n") + "\n\n---\n\n"
+              : "";
+            updateOrgMessages((prev) => prev.map(m =>
+              m.id === placeholderId
+                ? { ...m, content: `${progressSummary}**[${orgOrgName}]** ${resultText}`, streaming: false }
+                : m
+            ));
+          } else {
+            let resolved = false;
+            const onDone = onWsEvent((evt, raw) => {
+              const d = raw as Record<string, unknown> | null;
+              if (evt !== "org:command_done" || !d || d.command_id !== commandId) return;
+              resolved = true;
+              const result = d.result as Record<string, unknown> | null;
+              const error = d.error as string | undefined;
+              const resultText = (result && (result.result || result.error)) || error || JSON.stringify(d);
+              const progressSummary = progressLines.length > 0
+                ? progressLines.map(l => `> ${l}`).join("\n") + "\n\n---\n\n"
+                : "";
+              updateOrgMessages((prev) => prev.map(m =>
+                m.id === placeholderId
+                  ? { ...m, content: `${progressSummary}**[${orgOrgName}]** ${resultText}`, streaming: false }
+                  : m
+              ));
+            });
+
+            const pollInterval = 5_000;
+            const stallThreshold = 60_000;
+            let lastProgressAt = Date.now();
+            const origPushProgress = pushProgress;
+            const wrappedPush = (line: string) => { lastProgressAt = Date.now(); origPushProgress(line); };
+            // Replace the outer pushProgress's timestamp tracking
+            void wrappedPush;
+
+            while (!resolved) {
+              await new Promise(r => setTimeout(r, pollInterval));
+              if (resolved) break;
+              try {
+                const pollRes = await safeFetch(
+                  `${apiBaseUrl}/api/orgs/${targetOrgId}/commands/${commandId}`
+                );
+                const pollData = await pollRes.json();
+                if (pollData.status === "done" || pollData.status === "error") {
+                  if (!resolved) {
+                    resolved = true;
+                    const resultText = pollData.result?.result || pollData.result?.error || pollData.error || JSON.stringify(pollData);
+                    const progressSummary = progressLines.length > 0
+                      ? progressLines.map(l => `> ${l}`).join("\n") + "\n\n---\n\n"
+                      : "";
+                    updateOrgMessages((prev) => prev.map(m =>
+                      m.id === placeholderId
+                        ? { ...m, content: `${progressSummary}**[${orgOrgName}]** ${resultText}`, streaming: false }
+                        : m
+                    ));
+                  }
+                }
+              } catch { /* poll failed, retry next cycle */ }
+
+              if (!resolved && Date.now() - lastProgressAt > stallThreshold) {
+                pushProgress("⏳ 执行时间较长，组织仍在处理中...");
+                lastProgressAt = Date.now();
+              }
+            }
+
+            onDone();
+          }
         } catch (e: any) {
           updateOrgMessages((prev) => prev.map(m =>
             m.id === placeholderId

@@ -1,0 +1,454 @@
+/**
+ * Project management kanban board — column-based task view.
+ * Supports temporary and permanent projects, task CRUD, and status transitions.
+ */
+import { useState, useEffect, useCallback } from "react";
+import { safeFetch } from "../providers";
+import { OrgAvatar } from "./OrgAvatars";
+
+interface ProjectTask {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: string;
+  assignee_node_id: string | null;
+  priority: number;
+  progress_pct: number;
+  created_at: string;
+  started_at: string | null;
+  delivered_at: string | null;
+  completed_at: string | null;
+}
+
+interface Project {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string;
+  project_type: string;
+  status: string;
+  owner_node_id: string | null;
+  tasks: ProjectTask[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface OrgProjectBoardProps {
+  orgId: string;
+  apiBaseUrl: string;
+  nodes?: Array<{ id: string; role_title?: string; avatar?: string | null }>;
+}
+
+const COLUMNS = [
+  { key: "todo", label: "待办", color: "#64748b" },
+  { key: "in_progress", label: "进行中", color: "#3b82f6" },
+  { key: "delivered", label: "已交付", color: "#8b5cf6" },
+  { key: "rejected", label: "已打回", color: "#f97316" },
+  { key: "accepted", label: "已验收", color: "#22c55e" },
+  { key: "blocked", label: "已阻塞", color: "#ef4444" },
+];
+
+const PROJECT_TYPE_LABEL: Record<string, string> = {
+  temporary: "临时项目",
+  permanent: "持续项目",
+};
+
+const PROJECT_STATUS_LABEL: Record<string, string> = {
+  planning: "规划中",
+  active: "进行中",
+  paused: "暂停",
+  completed: "已完成",
+  archived: "已归档",
+};
+
+export function OrgProjectBoard({ orgId, apiBaseUrl, nodes = [] }: OrgProjectBoardProps) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [showNewTask, setShowNewTask] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectType, setNewProjectType] = useState("temporary");
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskAssignee, setNewTaskAssignee] = useState("");
+
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const res = await safeFetch(`${apiBaseUrl}/api/orgs/${orgId}/projects`);
+      if (res.ok) {
+        const data = await res.json();
+        setProjects(data);
+        if (!selectedProjectId && data.length > 0) {
+          setSelectedProjectId(data[0].id);
+        }
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [orgId, apiBaseUrl, selectedProjectId]);
+
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  const createProject = async () => {
+    if (!newProjectName.trim()) return;
+    try {
+      await safeFetch(`${apiBaseUrl}/api/orgs/${orgId}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newProjectName, project_type: newProjectType, status: "active" }),
+      });
+      setNewProjectName("");
+      setShowNewProject(false);
+      fetchProjects();
+    } catch { /* ignore */ }
+  };
+
+  const createTask = async () => {
+    if (!newTaskTitle.trim() || !selectedProjectId) return;
+    try {
+      await safeFetch(`${apiBaseUrl}/api/orgs/${orgId}/projects/${selectedProjectId}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newTaskTitle,
+          assignee_node_id: newTaskAssignee || null,
+          status: "todo",
+        }),
+      });
+      setNewTaskTitle("");
+      setNewTaskAssignee("");
+      setShowNewTask(false);
+      fetchProjects();
+    } catch { /* ignore */ }
+  };
+
+  const updateTaskStatus = async (projectId: string, taskId: string, newStatus: string) => {
+    try {
+      await safeFetch(`${apiBaseUrl}/api/orgs/${orgId}/projects/${projectId}/tasks/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      fetchProjects();
+    } catch { /* ignore */ }
+  };
+
+  const deleteTask = async (projectId: string, taskId: string) => {
+    try {
+      await safeFetch(`${apiBaseUrl}/api/orgs/${orgId}/projects/${projectId}/tasks/${taskId}`, {
+        method: "DELETE",
+      });
+      fetchProjects();
+    } catch { /* ignore */ }
+  };
+
+  const selectedProject = projects.find(p => p.id === selectedProjectId);
+  const tasks = selectedProject?.tasks || [];
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)" }}>
+        加载中...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-app)" }}>
+      {/* Project tabs */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "8px 12px", borderBottom: "1px solid var(--line)",
+        flexShrink: 0, overflowX: "auto", flexWrap: "nowrap",
+      }}>
+        {projects.map(p => (
+          <button
+            key={p.id}
+            onClick={() => setSelectedProjectId(p.id)}
+            style={{
+              padding: "5px 12px", borderRadius: 6, border: "1px solid var(--line)",
+              background: p.id === selectedProjectId ? "var(--accent)" : "var(--bg-subtle, var(--bg-card))",
+              color: p.id === selectedProjectId ? "#fff" : "var(--text)",
+              cursor: "pointer", fontSize: 12, fontWeight: p.id === selectedProjectId ? 600 : 400,
+              whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4,
+            }}
+          >
+            {p.name}
+            <span style={{
+              fontSize: 9, padding: "1px 4px", borderRadius: 3,
+              background: p.id === selectedProjectId ? "rgba(255,255,255,0.2)" : "var(--bg-app)",
+              color: p.id === selectedProjectId ? "#fff" : "var(--muted)",
+            }}>
+              {PROJECT_TYPE_LABEL[p.project_type] || p.project_type}
+            </span>
+          </button>
+        ))}
+        <button
+          onClick={() => setShowNewProject(true)}
+          style={{
+            padding: "5px 12px", borderRadius: 6, border: "1px dashed var(--line)",
+            background: "transparent", color: "var(--muted)", cursor: "pointer", fontSize: 12,
+          }}
+        >
+          + 新项目
+        </button>
+        {selectedProject && (
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>
+            {PROJECT_STATUS_LABEL[selectedProject.status] || selectedProject.status}
+            &nbsp;&middot;&nbsp;
+            {selectedProject.tasks.length} 个任务
+          </span>
+        )}
+      </div>
+
+      {/* New project form */}
+      {showNewProject && (
+        <div style={{
+          padding: "8px 12px", borderBottom: "1px solid var(--line)",
+          display: "flex", gap: 8, alignItems: "center", flexShrink: 0,
+          background: "var(--bg-subtle, var(--bg-card))",
+        }}>
+          <input
+            placeholder="项目名称"
+            value={newProjectName}
+            onChange={e => setNewProjectName(e.target.value)}
+            style={{
+              flex: 1, border: "1px solid var(--line)", borderRadius: 4,
+              padding: "4px 8px", fontSize: 12, background: "var(--bg-input, var(--bg-app))",
+              color: "var(--text)", outline: "none",
+            }}
+            onKeyDown={e => e.key === "Enter" && createProject()}
+            autoFocus
+          />
+          <select
+            value={newProjectType}
+            onChange={e => setNewProjectType(e.target.value)}
+            style={{
+              border: "1px solid var(--line)", borderRadius: 4, padding: "4px 8px",
+              fontSize: 12, background: "var(--bg-input, var(--bg-app))", color: "var(--text)",
+            }}
+          >
+            <option value="temporary">临时项目</option>
+            <option value="permanent">持续项目</option>
+          </select>
+          <button
+            onClick={createProject}
+            style={{
+              padding: "4px 12px", borderRadius: 4, border: "none",
+              background: "var(--accent)", color: "#fff", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            创建
+          </button>
+          <button
+            onClick={() => setShowNewProject(false)}
+            style={{
+              padding: "4px 8px", borderRadius: 4, border: "none",
+              background: "transparent", color: "var(--muted)", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            取消
+          </button>
+        </div>
+      )}
+
+      {/* Kanban columns */}
+      {selectedProject ? (
+        <div style={{
+          flex: 1, display: "flex", gap: 8, padding: 12,
+          overflowX: "auto", overflowY: "hidden",
+        }}>
+          {COLUMNS.map(col => {
+            const colTasks = tasks.filter(t => t.status === col.key);
+            return (
+              <div key={col.key} style={{
+                flex: "1 1 180px", minWidth: 180, maxWidth: 280,
+                display: "flex", flexDirection: "column",
+                background: "var(--bg-subtle, var(--bg-card))",
+                borderRadius: 8, border: "1px solid var(--line)",
+                overflow: "hidden",
+              }}>
+                {/* Column header */}
+                <div style={{
+                  padding: "8px 10px", display: "flex", alignItems: "center", gap: 6,
+                  borderBottom: `2px solid ${col.color}`, flexShrink: 0,
+                }}>
+                  <span style={{
+                    width: 8, height: 8, borderRadius: "50%", background: col.color,
+                  }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>
+                    {col.label}
+                  </span>
+                  <span style={{
+                    fontSize: 10, color: "var(--muted)",
+                    background: "var(--bg-app)", padding: "1px 5px", borderRadius: 8,
+                  }}>
+                    {colTasks.length}
+                  </span>
+                </div>
+
+                {/* Tasks */}
+                <div style={{ flex: 1, overflowY: "auto", padding: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {colTasks.map(task => {
+                    const assignee = task.assignee_node_id ? nodeMap.get(task.assignee_node_id) : null;
+                    return (
+                      <div key={task.id} style={{
+                        padding: "8px 10px", borderRadius: 6,
+                        background: "var(--bg-app)", border: "1px solid var(--line)",
+                        fontSize: 12,
+                      }}>
+                        <div style={{ fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>
+                          {task.title}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                          {assignee ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <OrgAvatar avatarId={(assignee as any).avatar || null} size={16} />
+                              <span style={{ fontSize: 10, color: "var(--muted)" }}>
+                                {assignee.role_title || assignee.id}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: 10, color: "var(--muted)" }}>未分配</span>
+                          )}
+                          {/* Quick status transitions */}
+                          <div style={{ display: "flex", gap: 2 }}>
+                            {col.key === "todo" && (
+                              <button onClick={() => updateTaskStatus(task.project_id, task.id, "in_progress")}
+                                style={miniBtn} title="开始">▶</button>
+                            )}
+                            {col.key === "in_progress" && (
+                              <button onClick={() => updateTaskStatus(task.project_id, task.id, "delivered")}
+                                style={miniBtn} title="交付">✓</button>
+                            )}
+                            {col.key === "delivered" && (
+                              <>
+                                <button onClick={() => updateTaskStatus(task.project_id, task.id, "accepted")}
+                                  style={{ ...miniBtn, color: "#22c55e" }} title="验收">✓</button>
+                                <button onClick={() => updateTaskStatus(task.project_id, task.id, "rejected")}
+                                  style={{ ...miniBtn, color: "#ef4444" }} title="打回">✗</button>
+                              </>
+                            )}
+                            {col.key === "rejected" && (
+                              <button onClick={() => updateTaskStatus(task.project_id, task.id, "in_progress")}
+                                style={miniBtn} title="重做">↻</button>
+                            )}
+                            {col.key === "blocked" && (
+                              <button onClick={() => updateTaskStatus(task.project_id, task.id, "in_progress")}
+                                style={miniBtn} title="恢复">↻</button>
+                            )}
+                            <button onClick={() => deleteTask(task.project_id, task.id)}
+                              style={{ ...miniBtn, color: "var(--muted)" }} title="删除">×</button>
+                          </div>
+                        </div>
+                        {task.progress_pct > 0 && task.progress_pct < 100 && (
+                          <div style={{
+                            marginTop: 4, height: 3, borderRadius: 2,
+                            background: "var(--line)", overflow: "hidden",
+                          }}>
+                            <div style={{
+                              height: "100%", borderRadius: 2,
+                              background: col.color,
+                              width: `${task.progress_pct}%`,
+                            }} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{
+          flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+          color: "var(--muted)", flexDirection: "column", gap: 12,
+        }}>
+          <span style={{ fontSize: 14 }}>暂无项目</span>
+          <button
+            onClick={() => setShowNewProject(true)}
+            style={{
+              padding: "6px 16px", borderRadius: 6, border: "none",
+              background: "var(--accent)", color: "#fff", cursor: "pointer", fontSize: 13,
+            }}
+          >
+            创建第一个项目
+          </button>
+        </div>
+      )}
+
+      {/* Add task button */}
+      {selectedProject && (
+        <div style={{
+          padding: "6px 12px", borderTop: "1px solid var(--line)", flexShrink: 0,
+          display: "flex", gap: 8, alignItems: "center",
+        }}>
+          {showNewTask ? (
+            <>
+              <input
+                placeholder="任务标题"
+                value={newTaskTitle}
+                onChange={e => setNewTaskTitle(e.target.value)}
+                style={{
+                  flex: 1, border: "1px solid var(--line)", borderRadius: 4,
+                  padding: "4px 8px", fontSize: 12, background: "var(--bg-input, var(--bg-app))",
+                  color: "var(--text)", outline: "none",
+                }}
+                onKeyDown={e => e.key === "Enter" && createTask()}
+                autoFocus
+              />
+              <select
+                value={newTaskAssignee}
+                onChange={e => setNewTaskAssignee(e.target.value)}
+                style={{
+                  border: "1px solid var(--line)", borderRadius: 4, padding: "4px 8px",
+                  fontSize: 11, background: "var(--bg-input, var(--bg-app))", color: "var(--text)",
+                  maxWidth: 120,
+                }}
+              >
+                <option value="">未分配</option>
+                {nodes.map(n => (
+                  <option key={n.id} value={n.id}>{n.role_title || n.id}</option>
+                ))}
+              </select>
+              <button onClick={createTask} style={{
+                padding: "4px 12px", borderRadius: 4, border: "none",
+                background: "var(--accent)", color: "#fff", cursor: "pointer", fontSize: 12,
+              }}>
+                添加
+              </button>
+              <button onClick={() => setShowNewTask(false)} style={{
+                padding: "4px 8px", borderRadius: 4, border: "none",
+                background: "transparent", color: "var(--muted)", cursor: "pointer", fontSize: 12,
+              }}>
+                取消
+              </button>
+            </>
+          ) : (
+            <button onClick={() => setShowNewTask(true)} style={{
+              padding: "4px 12px", borderRadius: 6, border: "1px dashed var(--line)",
+              background: "transparent", color: "var(--muted)", cursor: "pointer", fontSize: 12,
+            }}>
+              + 添加任务
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const miniBtn: React.CSSProperties = {
+  padding: "1px 4px",
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  fontSize: 11,
+  color: "var(--text)",
+  borderRadius: 3,
+  lineHeight: 1,
+};
