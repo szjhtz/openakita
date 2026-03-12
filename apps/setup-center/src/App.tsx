@@ -554,7 +554,7 @@ export function App() {
   >([]);
   const [skillSummary, setSkillSummary] = useState<{ count: number; systemCount: number; externalCount: number } | null>(null);
   const [skillsDetail, setSkillsDetail] = useState<
-    { name: string; description: string; name_i18n?: Record<string, string> | null; description_i18n?: Record<string, string> | null; system: boolean; enabled?: boolean; tool_name?: string | null; category?: string | null; path?: string | null }[] | null
+    { skill_id: string; name: string; description: string; name_i18n?: Record<string, string> | null; description_i18n?: Record<string, string> | null; system: boolean; enabled?: boolean; tool_name?: string | null; category?: string | null; path?: string | null }[] | null
   >(null);
   const [skillsSelection, setSkillsSelection] = useState<Record<string, boolean>>({});
   const [skillsTouched, setSkillsTouched] = useState(false);
@@ -3279,6 +3279,7 @@ export function App() {
               const systemCount = skills.filter((s) => !!s.system).length;
               setSkillSummary({ count: skills.length, systemCount, externalCount: skills.length - systemCount });
               setSkillsDetail(skills.map((s) => ({
+                skill_id: String(s?.skill_id || s?.name || ""),
                 name: String(s?.name || ""), description: String(s?.description || ""),
                 system: !!s?.system, enabled: typeof s?.enabled === "boolean" ? s.enabled : undefined,
                 tool_name: s?.tool_name ?? null, category: s?.category ?? null, path: s?.path ?? null,
@@ -3355,6 +3356,7 @@ export function App() {
         setSkillSummary({ count: skills.length, systemCount, externalCount });
         setSkillsDetail(
           skills.map((s) => ({
+            skill_id: String(s?.skill_id || s?.name || ""),
             name: String(s?.name || ""),
             description: String(s?.description || ""),
             system: !!s?.system,
@@ -3715,9 +3717,9 @@ export function App() {
     if (skillsTouched) return;
     const m: Record<string, boolean> = {};
     for (const s of skillsDetail) {
-      if (!s?.name) continue;
-      if (s.system) m[s.name] = true;
-      else m[s.name] = typeof s.enabled === "boolean" ? s.enabled : true;
+      if (!s?.skill_id) continue;
+      if (s.system) m[s.skill_id] = true;
+      else m[s.skill_id] = typeof s.enabled === "boolean" ? s.enabled : true;
     }
     setSkillsSelection(m);
   }, [skillsDetail, skillsTouched]);
@@ -3765,6 +3767,7 @@ export function App() {
       setSkillSummary({ count: skillsList.length, systemCount, externalCount });
       setSkillsDetail(
         skillsList.map((s: any) => ({
+          skill_id: String(s?.skill_id || s?.name || ""),
           name: String(s?.name || ""),
           description: String(s?.description || ""),
           system: !!s?.system,
@@ -3795,9 +3798,9 @@ export function App() {
     setBusy("保存 skills 启用状态...");
     try {
       const externalAllowlist = skillsDetail
-        .filter((s) => !s.system && !!s.name)
-        .filter((s) => !!skillsSelection[s.name])
-        .map((s) => s.name);
+        .filter((s) => !s.system && !!s.skill_id)
+        .filter((s) => !!skillsSelection[s.skill_id])
+        .map((s) => s.skill_id);
 
       const content =
         JSON.stringify(
@@ -5263,13 +5266,13 @@ export function App() {
                 <button className="btnSmall" onClick={() => {
                   if (!skillsDetail) return; setSkillsTouched(true);
                   const m: Record<string, boolean> = {};
-                  for (const s of skillsDetail) m[s.name] = true;
+                  for (const s of skillsDetail) m[s.skill_id] = true;
                   setSkillsSelection(m);
                 }} disabled={!skillsDetail || !!busy}>{t("config.toolsEnableAll")}</button>
                 <button className="btnSmall" onClick={() => {
                   if (!skillsDetail) return; setSkillsTouched(true);
                   const m: Record<string, boolean> = {};
-                  for (const s of skillsDetail) m[s.name] = !!s.system;
+                  for (const s of skillsDetail) m[s.skill_id] = !!s.system;
                   setSkillsSelection(m);
                 }} disabled={!skillsDetail || !!busy}>{t("config.toolsSystemOnly")}</button>
                 <button className="btnSmall" onClick={doRefreshSkills} disabled={!currentWorkspaceId || !!busy}>{t("config.toolsRefresh")}</button>
@@ -5289,7 +5292,7 @@ export function App() {
                     const dName = s.name_i18n?.[lang] || s.name;
                     const dDesc = s.description_i18n?.[lang] || s.description;
                     return (
-                      <div key={s.name} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
+                      <div key={s.skill_id} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
                         <div style={{ minWidth: 0 }}><b>{dName}</b>{dName !== s.name && <span style={{ opacity: 0.4, marginLeft: 4, fontSize: 11, fontFamily: "monospace" }}>{s.name}</span>} <span className="pill" style={{ fontSize: 11 }}>{t("skills.system")}</span>
                           <span className="help" style={{ marginLeft: 8 }}>{dDesc}</span></div>
                       </div>
@@ -5302,17 +5305,17 @@ export function App() {
                     </>
                   )}
                   {externalSkills.map((s) => {
-                    const on = !!skillsSelection[s.name];
+                    const on = !!skillsSelection[s.skill_id];
                     const lang = i18n.language?.startsWith("zh") ? "zh" : i18n.language || "zh";
                     const dName = s.name_i18n?.[lang] || s.name;
                     const dDesc = s.description_i18n?.[lang] || s.description;
                     return (
-                      <div key={s.name} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
+                      <div key={s.skill_id} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
                         <div style={{ flex: 1, minWidth: 0 }}><b>{dName}</b>{dName !== s.name && <span style={{ opacity: 0.4, marginLeft: 4, fontSize: 11, fontFamily: "monospace" }}>{s.name}</span>}
                           <span className="help" style={{ marginLeft: 8 }}>{dDesc}</span></div>
                         <label className="pill" style={{ cursor: "pointer", userSelect: "none", flexShrink: 0 }}>
                           <input style={{ width: 14, height: 14 }} type="checkbox" checked={on}
-                            onChange={(e) => { setSkillsTouched(true); setSkillsSelection((m) => ({ ...m, [s.name]: e.target.checked })); }} />
+                            onChange={(e) => { setSkillsTouched(true); setSkillsSelection((m) => ({ ...m, [s.skill_id]: e.target.checked })); }} />
                           {t("config.enable")}
                         </label>
                       </div>

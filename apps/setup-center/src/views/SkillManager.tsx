@@ -590,6 +590,7 @@ export function SkillManager({
       }
 
       const list: SkillInfo[] = (data.skills || []).map((s: Record<string, unknown>) => ({
+        skillId: (s.skill_id as string) || (s.name as string),
         name: s.name as string,
         description: s.description as string || "",
         name_i18n: (s.name_i18n as Record<string, string> | null) || null,
@@ -606,7 +607,7 @@ export function SkillManager({
       setSkills(list);
       // 同步 enabledDraft 到后端最新状态
       const draft: Record<string, boolean> = {};
-      for (const s of list) draft[s.name] = s.enabled !== false;
+      for (const s of list) draft[s.skillId] = s.enabled !== false;
       setEnabledDraft(draft);
       setEnabledDirty(false);
       return true;
@@ -635,7 +636,7 @@ export function SkillManager({
   const skillsWithConfig = useMemo(() =>
     skills.map((s) => ({
       ...s,
-      enabled: enabledDraft[s.name] ?? (s.enabled !== false),
+      enabled: enabledDraft[s.skillId] ?? (s.enabled !== false),
       configComplete: checkConfigComplete(s.config, envDraft),
     })),
     [skills, envDraft, enabledDraft],
@@ -690,8 +691,8 @@ export function SkillManager({
 
   // ── 切换启用/禁用（仅更新本地 draft，不自动保存） ──
   const handleToggleEnabled = useCallback((skill: SkillInfo) => {
-    const cur = enabledDraft[skill.name] ?? (skill.enabled !== false);
-    setEnabledDraft((prev) => ({ ...prev, [skill.name]: !cur }));
+    const cur = enabledDraft[skill.skillId] ?? (skill.enabled !== false);
+    setEnabledDraft((prev) => ({ ...prev, [skill.skillId]: !cur }));
     setEnabledDirty(true);
   }, [enabledDraft]);
 
@@ -701,8 +702,8 @@ export function SkillManager({
     setError(null);
     try {
       const externalAllowlist = skills
-        .filter((s) => !s.system && (enabledDraft[s.name] ?? (s.enabled !== false)))
-        .map((s) => s.name);
+        .filter((s) => !s.system && (enabledDraft[s.skillId] ?? (s.enabled !== false)))
+        .map((s) => s.skillId);
 
       const content = {
         version: 1,
@@ -866,7 +867,7 @@ export function SkillManager({
 
   // ── 打开技能详情弹窗 ──
   const handleViewDetail = useCallback(async (skill: SkillInfo) => {
-    const requestName = skill.name;
+    const requestName = skill.skillId;
     detailRequestNameRef.current = requestName;
     setDetailSkill(skill);
     setDetailEditing(false);
@@ -883,7 +884,7 @@ export function SkillManager({
     }
 
     try {
-      const res = await safeFetch(`${apiBaseUrl}/api/skills/content/${encodeURIComponent(skill.name)}`, {
+      const res = await safeFetch(`${apiBaseUrl}/api/skills/content/${encodeURIComponent(skill.skillId)}`, {
         signal: AbortSignal.timeout(10_000),
       });
       if (detailRequestNameRef.current !== requestName) return;
@@ -917,7 +918,7 @@ export function SkillManager({
     setDetailSaving(true);
     setDetailContentError(null);
     try {
-      const res = await safeFetch(`${apiBaseUrl}/api/skills/content/${encodeURIComponent(detailSkill.name)}`, {
+      const res = await safeFetch(`${apiBaseUrl}/api/skills/content/${encodeURIComponent(detailSkill.skillId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: detailEditContent }),
@@ -1281,10 +1282,10 @@ export function SkillManager({
           )}
           {filteredSkills.map((skill) => (
             <SkillCard
-              key={skill.name}
+              key={skill.skillId}
               skill={skill}
-              expanded={expandedSkill === skill.name}
-              onToggleExpand={() => setExpandedSkill(expandedSkill === skill.name ? null : skill.name)}
+              expanded={expandedSkill === skill.skillId}
+              onToggleExpand={() => setExpandedSkill(expandedSkill === skill.skillId ? null : skill.skillId)}
               onToggleEnabled={() => handleToggleEnabled(skill)}
               onViewDetail={() => handleViewDetail(skill)}
               envDraft={envDraft}

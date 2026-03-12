@@ -191,9 +191,11 @@ async def list_skills(request: Request):
             config = getattr(parsed.metadata, "config", None) or None
 
         is_system = bool(skill.system)
-        is_enabled = is_system or effective_allowlist is None or skill.name in effective_allowlist
+        sid = getattr(skill, "skill_id", skill.name)
+        is_enabled = is_system or effective_allowlist is None or sid in effective_allowlist
 
         skills.append({
+            "skill_id": sid,
             "name": skill.name,
             "description": skill.description,
             "name_i18n": skill.name_i18n or None,
