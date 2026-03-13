@@ -4317,18 +4317,17 @@ export function App() {
         </div>
 
         {/* ── Add endpoint dialog ── */}
-        {addEpDialogOpen && (
-          <ModalOverlay onClose={() => setAddEpDialogOpen(false)}>
-            <div className="modalContent">
-              <div className="dialogHeader">
-                <div className="cardTitle">{isEditingEndpoint ? t("llm.editEndpoint") : t("llm.addEndpoint")}</div>
-                <button className="dialogCloseBtn" onClick={() => { setAddEpDialogOpen(false); resetEndpointEditor(); }}><IconX size={14} /></button>
-              </div>
+        <Dialog open={addEpDialogOpen} onOpenChange={(open) => { if (!open) { setAddEpDialogOpen(false); resetEndpointEditor(); setConnTestResult(null); } }}>
+          <DialogContent className="sm:max-w-[480px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <DialogHeader className="px-6 pt-5 pb-3 shrink-0">
+              <DialogTitle>{isEditingEndpoint ? t("llm.editEndpoint") : t("llm.addEndpoint")}</DialogTitle>
+              <DialogDescription className="sr-only">{t("llm.addEndpoint")}</DialogDescription>
+            </DialogHeader>
 
-              <div className="dialogBody">
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
               {/* Provider */}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.provider")}</div>
+              <div className="space-y-1.5">
+                <Label>{t("llm.provider")}</Label>
                 <ProviderSearchSelect
                   value={providerSlug}
                   onChange={(v) => setProviderSlug(v)}
@@ -4337,54 +4336,36 @@ export function App() {
                   placeholder={providers.length === 0 ? t("common.loading") : undefined}
                   disabled={providers.length === 0}
                 />
-                {providerApplyUrl && <div className="help" style={{ marginTop: 6, paddingLeft: 2 }}>Key: <a href={providerApplyUrl} target="_blank" rel="noreferrer">{providerApplyUrl}</a></div>}
+                {providerApplyUrl && <p className="text-xs text-muted-foreground">Key: <a href={providerApplyUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">{providerApplyUrl}</a></p>}
               </div>
 
-              {/* Coding Plan toggle — only shown when provider supports it */}
+              {/* Coding Plan toggle */}
               {selectedProvider?.coding_plan_base_url && (
-                <div className="dialogSection">
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-                    <input
-                      type="checkbox"
-                      checked={codingPlanMode}
-                      onChange={(e) => { setCodingPlanMode(e.target.checked); setBaseUrlTouched(false); }}
-                      style={{ width: 16, height: 16, accentColor: "var(--brand)" }}
-                    />
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>{t("llm.codingPlan")}</span>
+                <div className="space-y-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={codingPlanMode} onChange={(e) => { setCodingPlanMode(e.target.checked); setBaseUrlTouched(false); }} className="size-4 accent-primary" />
+                    <span className="text-sm font-medium">{t("llm.codingPlan")}</span>
                   </label>
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 24 }}>{t("llm.codingPlanHint")}</div>
+                  <p className="text-xs text-muted-foreground pl-6">{t("llm.codingPlanHint")}</p>
                 </div>
               )}
 
               {/* Base URL */}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.baseUrl")}</div>
-                <input
-                  value={baseUrl}
-                  onChange={(e) => { setBaseUrl(e.target.value); setBaseUrlTouched(true); }}
-                  placeholder={selectedProvider?.default_base_url || "https://api.example.com/v1"}
-                  style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }}
-                />
-                <div className="help" style={{ marginTop: 4, paddingLeft: 2 }}>{t("llm.baseUrlHint")}</div>
+              <div className="space-y-1.5">
+                <Label>{t("llm.baseUrl")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.baseUrlHint")}</span></Label>
+                <Input value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setBaseUrlTouched(true); }} placeholder={selectedProvider?.default_base_url || "https://api.example.com/v1"} />
               </div>
 
               {/* API Key */}
-              <div className="dialogSection">
-                <div className="dialogLabel">API Key {isLocalProvider(selectedProvider) && <span style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>({t("llm.localNoKey")})</span>}</div>
-                <input
-                  value={apiKeyValue}
-                  onChange={(e) => setApiKeyValue(e.target.value)}
-                  placeholder={isLocalProvider(selectedProvider) ? t("llm.localKeyPlaceholder") : "sk-..."}
-                  type={(secretShown.__LLM_API_KEY && !IS_WEB) ? "text" : "password"}
-                />
-                {isLocalProvider(selectedProvider) && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, color: "var(--brand)" }}>{t("llm.localHint")}</div>
-                )}
+              <div className="space-y-1.5">
+                <Label>API Key {isLocalProvider(selectedProvider) && <span className="text-muted-foreground text-[11px] font-normal">({t("llm.localNoKey")})</span>}</Label>
+                <Input value={apiKeyValue} onChange={(e) => setApiKeyValue(e.target.value)} placeholder={isLocalProvider(selectedProvider) ? t("llm.localKeyPlaceholder") : "sk-..."} type={(secretShown.__LLM_API_KEY && !IS_WEB) ? "text" : "password"} />
+                {isLocalProvider(selectedProvider) && <p className="text-xs text-primary">{t("llm.localHint")}</p>}
               </div>
 
-              {/* Model name — always visible; fetch is optional */}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.selectModel")}</div>
+              {/* Model */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.selectModel")} <span className="text-[11px] font-normal text-muted-foreground/70">自行输入或<Button variant="link" size="xs" data-slot="label-link" className="h-auto p-0 text-[11px] text-primary hover:text-primary/80" onClick={doFetchModels} disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || !!busy}>拉取模型列表</Button>并选择{models.length > 0 && <span className="text-muted-foreground/50">（已拉取 {models.length} 个）</span>}</span></Label>
                 <SearchSelect
                   value={selectedModelId}
                   onChange={(v) => setSelectedModelId(v)}
@@ -4392,46 +4373,23 @@ export function App() {
                   placeholder={models.length > 0 ? t("llm.searchModel") : t("llm.modelPlaceholder")}
                   disabled={!!busy}
                 />
-                {models.length === 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.7 }}>{t("llm.modelManualHint")}</span>
-                    {selectedProvider?.supports_model_list !== false && (
-                      <button onClick={doFetchModels} className="btnSmall" disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || !!busy}
-                        style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                        {t("llm.fetchModels")}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {models.length > 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.6 }}>{t("llm.modelFetched", { count: models.length })}</span>
-                    <button onClick={doFetchModels} className="btnSmall" disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || !!busy}
-                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                      {t("llm.refetch")}
-                    </button>
-                  </div>
-                )}
                 {error && (
-                  <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(229,57,53,0.12)", border: "1px solid rgba(229,57,53,0.3)", borderRadius: 6, fontSize: 12, color: "#e53935", wordBreak: "break-all" }}>
+                  <div className="mt-1 px-2.5 py-1.5 rounded-md text-xs text-destructive bg-destructive/10 border border-destructive/30 break-all">
                     ⚠ {error}
                   </div>
                 )}
               </div>
 
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.endpointName")}</div>
-                <input
-                  value={endpointName}
-                  onChange={(e) => { setEndpointNameTouched(true); setEndpointName(e.target.value); }}
-                  placeholder="dashscope-qwen3-max"
-                />
+              {/* Endpoint Name */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.endpointName")}</Label>
+                <Input value={endpointName} onChange={(e) => { setEndpointNameTouched(true); setEndpointName(e.target.value); }} placeholder="dashscope-qwen3-max" />
               </div>
 
-              {/* Capabilities as chips */}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.capabilities")}</div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {/* Capabilities */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.capabilities")}</Label>
+                <div className="flex flex-wrap gap-2">
                   {[
                     { k: "text", name: t("llm.capText") },
                     { k: "thinking", name: t("llm.capThinking") },
@@ -4441,81 +4399,87 @@ export function App() {
                   ].map((c) => {
                     const on = capSelected.includes(c.k);
                     return (
-                      <span key={c.k} className={`capChip ${on ? "capChipActive" : ""}`}
+                      <button key={c.k} data-slot="cap-chip" type="button"
+                        className={cn(
+                          "inline-flex items-center justify-center h-8 px-3.5 rounded-md border text-sm font-medium cursor-pointer transition-colors",
+                          on
+                            ? "border-primary bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+                            : "border-input bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        )}
                         onClick={() => { setCapTouched(true); setCapSelected((prev) => { const set = new Set(prev); if (set.has(c.k)) set.delete(c.k); else set.add(c.k); const out = Array.from(set); return out.length ? out : ["text"]; }); }}
-                      >{on ? "\u2713 " : ""}{c.name}</span>
+                      >{c.name}</button>
                     );
                   })}
                 </div>
               </div>
 
               {/* Advanced (collapsed) */}
-              <details className="dialogDetails">
-                <summary>{t("llm.advanced")}</summary>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advApiType")}</div>
-                    <select value={apiType} onChange={(e) => setApiType(e.target.value as any)} style={{ width: 180, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }}>
-                      <option value="openai">openai</option>
-                      <option value="anthropic">anthropic</option>
-                    </select>
+              <details className="group rounded-lg border border-border">
+                <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground select-none list-none [&::-webkit-details-marker]:hidden hover:text-foreground transition-colors">
+                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
+                  {t("llm.advancedParams") || t("llm.advanced") || "高级参数"}
+                </summary>
+                <div className="border-t border-border px-4 py-3 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>{t("llm.advApiType")}</Label>
+                      <Select value={apiType} onValueChange={(v) => setApiType(v as any)}>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="openai">openai</SelectItem>
+                          <SelectItem value="anthropic">anthropic</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>{t("llm.advPriority")}</Label>
+                      <Input type="number" value={String(endpointPriority)} onChange={(e) => setEndpointPriority(Number(e.target.value))} />
+                    </div>
                   </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advKeyEnv")}</div>
-                    <input value={apiKeyEnv} onChange={(e) => { setApiKeyEnvTouched(true); setApiKeyEnv(e.target.value); }} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
+                  <div className="space-y-1.5">
+                    <Label>{t("llm.advKeyEnv")}</Label>
+                    <Input value={apiKeyEnv} onChange={(e) => { setApiKeyEnvTouched(true); setApiKeyEnv(e.target.value); }} />
                   </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advPriority")}</div>
-                    <input type="number" value={String(endpointPriority)} onChange={(e) => setEndpointPriority(Number(e.target.value))} style={{ width: 100, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
+                  <div className="space-y-1.5">
+                    <Label>{t("llm.advMaxTokens")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.advMaxTokensHint")}</span></Label>
+                    <Input type="number" min={0} value={addEpMaxTokens} onChange={(e) => setAddEpMaxTokens(Math.max(0, parseInt(e.target.value) || 0))} />
                   </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advMaxTokens")}</div>
-                    <input type="number" min={0} value={addEpMaxTokens} onChange={(e) => setAddEpMaxTokens(Math.max(0, parseInt(e.target.value) || 0))} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
-                    <div className="help" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.advMaxTokensHint")}</div>
+                  <div className="space-y-1.5">
+                    <Label>{t("llm.advContextWindow")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.advContextWindowHint")}</span></Label>
+                    <Input type="number" min={1024} value={addEpContextWindow} onChange={(e) => setAddEpContextWindow(Math.max(1024, parseInt(e.target.value) || 200000))} />
                   </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advContextWindow")}</div>
-                    <input type="number" min={1024} value={addEpContextWindow} onChange={(e) => setAddEpContextWindow(Math.max(1024, parseInt(e.target.value) || 200000))} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
-                    <div className="help" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.advContextWindowHint")}</div>
+                  <div className="space-y-1.5">
+                    <Label>{t("llm.advTimeout")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.advTimeoutHint")}</span></Label>
+                    <Input type="number" min={10} value={addEpTimeout} onChange={(e) => setAddEpTimeout(Math.max(10, parseInt(e.target.value) || 180))} />
                   </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advTimeout")}</div>
-                    <input type="number" min={10} value={addEpTimeout} onChange={(e) => setAddEpTimeout(Math.max(10, parseInt(e.target.value) || 180))} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
-                    <div className="help" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.advTimeoutHint")}</div>
-                  </div>
-                  <div>
-                    <div className="dialogLabel">{t("llm.advRpmLimit")}</div>
-                    <input type="number" min={0} value={addEpRpmLimit} onChange={(e) => setAddEpRpmLimit(Math.max(0, parseInt(e.target.value) || 0))} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", fontSize: 13 }} />
-                    <div className="help" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.advRpmLimitHint")}</div>
+                  <div className="space-y-1.5">
+                    <Label>{t("llm.advRpmLimit")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.advRpmLimitHint")}</span></Label>
+                    <Input type="number" min={0} value={addEpRpmLimit} onChange={(e) => setAddEpRpmLimit(Math.max(0, parseInt(e.target.value) || 0))} />
                   </div>
                 </div>
               </details>
-              </div>
+            </div>
 
-              {/* 连接测试结果（预留固定高度，避免把底部按钮“顶”动） */}
-              <div className="connTestSlot">
-                {connTestResult ? (
-                  <div className={`connTestResult ${connTestResult.ok ? "connTestOk" : "connTestFail"}`}>
-                    {connTestResult.ok
-                      ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
-                      : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
-                  </div>
-                ) : (
-                  <div className="connTestResult connTestPlaceholder" />
-                )}
+            {connTestResult && (
+              <div className={cn("mx-6 px-3 py-2 rounded-lg text-xs leading-relaxed shrink-0",
+                connTestResult.ok ? "bg-emerald-500/8 border border-emerald-500/25 text-emerald-600" : "bg-red-500/6 border border-red-500/20 text-red-600"
+              )}>
+                {connTestResult.ok
+                  ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
+                  : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
               </div>
+            )}
 
-              {/* Footer — fixed at bottom */}
-              <div className="dialogFooter">
-                <button className="btnSecondary endpointFooterBtn" onClick={() => { setAddEpDialogOpen(false); resetEndpointEditor(); setConnTestResult(null); }}>{t("common.cancel")}</button>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <button
-                    className="btnSecondary endpointFooterBtn"
+            <DialogFooter className="px-6 py-2.5 shrink-0 flex-col sm:flex-col gap-1.5">
+              <div className="flex items-center justify-between w-full">
+                <Button variant="ghost" onClick={() => { setAddEpDialogOpen(false); resetEndpointEditor(); setConnTestResult(null); }}>{t("common.cancel")}</Button>
+                <div className="flex gap-2 items-center">
+                  <Button variant="secondary"
                     disabled={(!apiKeyValue.trim() && !isLocalProvider(selectedProvider)) || !baseUrl.trim() || connTesting}
                     onClick={() => doTestConnection({ testApiType: apiType, testBaseUrl: baseUrl, testApiKey: apiKeyValue.trim() || (isLocalProvider(selectedProvider) ? localProviderPlaceholderKey(selectedProvider) : ""), testProviderSlug: selectedProvider?.slug })}
                   >
                     {connTesting ? t("llm.testTesting") : t("llm.testConnection")}
-                  </button>
+                  </Button>
                   {(() => {
                     const _isLocal = isLocalProvider(selectedProvider);
                     const missing: string[] = [];
@@ -4525,25 +4489,27 @@ export function App() {
                     if (!currentWorkspaceId && dataMode !== "remote") missing.push(t("workspace.title") || "工作区");
                     const btnDisabled = missing.length > 0 || !!busy;
                     return (
-                      <div className="endpointPrimaryWrap">
-                        <button className="btnPrimary endpointFooterBtn" onClick={async () => { const ok = await doSaveEndpoint(); if (ok) { setAddEpDialogOpen(false); setConnTestResult(null); } }} disabled={btnDisabled}>
-                          {isEditingEndpoint ? t("common.save") : t("llm.addEndpoint")}
-                        </button>
-                        <span className="endpointPrimaryHint">
-                          {btnDisabled && !busy && missing.length > 0 ? (
-                            <>
-                            {t("common.missingFields") || "缺少"}: {missing.join(", ")}
-                            </>
-                          ) : null}
-                        </span>
-                      </div>
+                      <Button onClick={async () => { const ok = await doSaveEndpoint(); if (ok) { setAddEpDialogOpen(false); setConnTestResult(null); } }} disabled={btnDisabled}>
+                        {isEditingEndpoint ? t("common.save") : t("llm.addEndpoint")}
+                      </Button>
                     );
                   })()}
                 </div>
               </div>
-            </div>
-          </ModalOverlay>
-        )}
+              {(() => {
+                const _isLocal = isLocalProvider(selectedProvider);
+                const missing: string[] = [];
+                if (!baseUrl.trim()) missing.push("Base URL");
+                if (!_isLocal && !apiKeyValue.trim()) missing.push("API Key");
+                if (!selectedModelId.trim()) missing.push(t("status.model"));
+                if (!currentWorkspaceId && dataMode !== "remote") missing.push(t("workspace.title") || "工作区");
+                return missing.length > 0 && !busy ? (
+                  <div className="text-[10px] text-muted-foreground text-right w-full">{t("common.missingFields") || "缺少"}: {missing.join(", ")}</div>
+                ) : null;
+              })()}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── Edit endpoint modal ── */}
         <Dialog open={editModalOpen && !!editDraft} onOpenChange={(open) => { if (!open) { resetEndpointEditor(); setConnTestResult(null); } }}>
@@ -4753,16 +4719,17 @@ export function App() {
         </Dialog>
 
         {/* ── Add compiler dialog ── */}
-        {addCompDialogOpen && (
-          <ModalOverlay onClose={() => setAddCompDialogOpen(false)}>
-            <div className="modalContent">
-              <div className="dialogHeader">
-                <div className="cardTitle">{t("llm.addCompiler")}</div>
-                <button className="dialogCloseBtn" onClick={() => setAddCompDialogOpen(false)}><IconX size={14} /></button>
-              </div>
-              <div className="dialogBody">
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.provider")}</div>
+        <Dialog open={addCompDialogOpen} onOpenChange={(open) => { if (!open) { setAddCompDialogOpen(false); setConnTestResult(null); } }}>
+          <DialogContent className="sm:max-w-[480px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <DialogHeader className="px-6 pt-5 pb-3 shrink-0">
+              <DialogTitle>{t("llm.addCompiler")}</DialogTitle>
+              <DialogDescription className="sr-only">{t("llm.addCompiler")}</DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+              {/* Provider */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.provider")}</Label>
                 <ProviderSearchSelect
                   value={compilerProviderSlug}
                   onChange={(slug) => {
@@ -4794,10 +4761,11 @@ export function App() {
                   extraOptions={[{ value: "__custom__", label: t("llm.customProvider") }]}
                 />
               </div>
-              {/* Coding Plan toggle for compiler endpoint */}
+
+              {/* Coding Plan toggle */}
               {(() => { const cp = providers.find((x) => x.slug === compilerProviderSlug); return cp?.coding_plan_base_url ? (
-                <div className="dialogSection">
-                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
+                <div className="space-y-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={compilerCodingPlan}
@@ -4814,72 +4782,61 @@ export function App() {
                           }
                         }
                       }}
-                      style={{ width: 16, height: 16, accentColor: "var(--brand)" }}
+                      className="size-4 accent-primary"
                     />
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>{t("llm.codingPlan")}</span>
+                    <span className="text-sm font-medium">{t("llm.codingPlan")}</span>
                   </label>
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 24 }}>{t("llm.codingPlanHint")}</div>
+                  <p className="text-xs text-muted-foreground pl-6">{t("llm.codingPlanHint")}</p>
                 </div>
               ) : null; })()}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.baseUrl")}</div>
-                <input value={compilerBaseUrl} onChange={(e) => setCompilerBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-                <div className="cardHint" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.baseUrlHint")}</div>
+
+              {/* Base URL */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.baseUrl")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.baseUrlHint")}</span></Label>
+                <Input value={compilerBaseUrl} onChange={(e) => setCompilerBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.apiKeyEnv")}</div>
-                <input value={compilerApiKeyEnv} onChange={(e) => setCompilerApiKeyEnv(e.target.value)} placeholder="MY_API_KEY" />
+
+              {/* API Key Env */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.apiKeyEnv")}</Label>
+                <Input value={compilerApiKeyEnv} onChange={(e) => setCompilerApiKeyEnv(e.target.value)} placeholder="MY_API_KEY" />
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">API Key {isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) && <span style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>({t("llm.localNoKey")})</span>}</div>
-                <input value={compilerApiKeyValue} onChange={(e) => setCompilerApiKeyValue(e.target.value)} placeholder={isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} type="password" />
-                {isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, color: "var(--brand)" }}>{t("llm.localHint")}</div>
-                )}
+
+              {/* API Key */}
+              <div className="space-y-1.5">
+                <Label>API Key {isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) && <span className="text-muted-foreground text-[11px] font-normal">({t("llm.localNoKey")})</span>}</Label>
+                <Input value={compilerApiKeyValue} onChange={(e) => setCompilerApiKeyValue(e.target.value)} placeholder={isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} type="password" />
+                {isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug)) && <p className="text-xs text-primary">{t("llm.localHint")}</p>}
               </div>
-              {/* Model name — always visible; fetch is optional */}
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("status.model")}</div>
+
+              {/* Model */}
+              <div className="space-y-1.5">
+                <Label>{t("status.model")} <span className="text-[11px] font-normal text-muted-foreground/70">自行输入或<Button variant="link" size="xs" data-slot="label-link" className="h-auto p-0 text-[11px] text-primary hover:text-primary/80" onClick={doFetchCompilerModels} disabled={(!compilerApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug))) || !compilerBaseUrl.trim() || !!busy}>拉取模型列表</Button>并选择{compilerModels.length > 0 && <span className="text-muted-foreground/50">（已拉取 {compilerModels.length} 个）</span>}</span></Label>
                 <SearchSelect value={compilerModel} onChange={(v) => setCompilerModel(v)} options={compilerModels.map((m) => m.id)} placeholder={compilerModels.length > 0 ? t("llm.searchModel") : t("llm.modelPlaceholder")} disabled={!!busy} />
-                {compilerModels.length === 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.7 }}>{t("llm.modelManualHint")}</span>
-                    <button onClick={doFetchCompilerModels} className="btnSmall" disabled={(!compilerApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug))) || !compilerBaseUrl.trim() || !!busy}
-                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                      {t("llm.fetchModels")}
-                    </button>
-                  </div>
-                )}
-                {compilerModels.length > 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.6 }}>{t("llm.modelFetched", { count: compilerModels.length })}</span>
-                    <button onClick={doFetchCompilerModels} className="btnSmall" disabled={(!compilerApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug))) || !compilerBaseUrl.trim() || !!busy}
-                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                      {t("llm.refetch")}
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.endpointName")} <span style={{ color: "var(--muted)", fontSize: 11 }}>({t("common.optional")})</span></div>
-                <input value={compilerEndpointName} onChange={(e) => setCompilerEndpointName(e.target.value)} placeholder={`compiler-${compilerProviderSlug || "custom"}-${compilerModel || "model"}`} />
-              </div>
               </div>
 
-              {/* 连接测试结果 */}
-              {connTestResult && (
-                <div className={`connTestResult ${connTestResult.ok ? "connTestOk" : "connTestFail"}`}>
-                  {connTestResult.ok
-                    ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
-                    : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
-                </div>
-              )}
+              {/* Endpoint Name */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.endpointName")} <span className="text-[11px] font-normal text-muted-foreground/70">({t("common.optional")})</span></Label>
+                <Input value={compilerEndpointName} onChange={(e) => setCompilerEndpointName(e.target.value)} placeholder={`compiler-${compilerProviderSlug || "custom"}-${compilerModel || "model"}`} />
+              </div>
+            </div>
 
-              <div className="dialogFooter">
-                <button className="btnSecondary endpointFooterBtn" onClick={() => { setAddCompDialogOpen(false); setConnTestResult(null); }}>{t("common.cancel")}</button>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <button
-                    className="btnSecondary endpointFooterBtn"
+            {connTestResult && (
+              <div className={cn("mx-6 px-3 py-2 rounded-lg text-xs leading-relaxed shrink-0",
+                connTestResult.ok ? "bg-emerald-500/8 border border-emerald-500/25 text-emerald-600" : "bg-red-500/6 border border-red-500/20 text-red-600"
+              )}>
+                {connTestResult.ok
+                  ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
+                  : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
+              </div>
+            )}
+
+            <DialogFooter className="px-6 py-2.5 shrink-0 flex-col sm:flex-col gap-1.5">
+              <div className="flex items-center justify-between w-full">
+                <Button variant="ghost" onClick={() => { setAddCompDialogOpen(false); setConnTestResult(null); }}>{t("common.cancel")}</Button>
+                <div className="flex gap-2 items-center">
+                  <Button variant="secondary"
                     disabled={(!compilerApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug))) || !compilerBaseUrl.trim() || connTesting}
                     onClick={() => { const _cp = providers.find((p) => p.slug === compilerProviderSlug); doTestConnection({
                       testApiType: compilerApiType,
@@ -4889,7 +4846,7 @@ export function App() {
                     }); }}
                   >
                     {connTesting ? t("llm.testTesting") : t("llm.testConnection")}
-                  </button>
+                  </Button>
                   {(() => {
                     const _isCompLocal = isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug));
                     const cMissing: string[] = [];
@@ -4899,35 +4856,40 @@ export function App() {
                     if (!currentWorkspaceId && dataMode !== "remote") cMissing.push(t("workspace.title") || "工作区");
                     const cBtnDisabled = cMissing.length > 0 || !!busy;
                     return (
-                      <div className="endpointPrimaryWrap">
-                        <button className="btnPrimary endpointFooterBtn" onClick={async () => { const ok = await doSaveCompilerEndpoint(); if (ok) { setAddCompDialogOpen(false); setConnTestResult(null); } }} disabled={cBtnDisabled}>
-                          {t("llm.addEndpoint")}
-                        </button>
-                        <span className="endpointPrimaryHint">
-                          {cBtnDisabled && !busy && cMissing.length > 0 ? (
-                            <>{t("common.missingFields") || "缺少"}: {cMissing.join(", ")}</>
-                          ) : null}
-                        </span>
-                      </div>
+                      <Button onClick={async () => { const ok = await doSaveCompilerEndpoint(); if (ok) { setAddCompDialogOpen(false); setConnTestResult(null); } }} disabled={cBtnDisabled}>
+                        {t("llm.addEndpoint")}
+                      </Button>
                     );
                   })()}
                 </div>
               </div>
-            </div>
-          </ModalOverlay>
-        )}
+              {(() => {
+                const _isCompLocal = isLocalProvider(providers.find((p) => p.slug === compilerProviderSlug));
+                const cMissing: string[] = [];
+                if (!compilerModel.trim()) cMissing.push(t("status.model"));
+                if (!_isCompLocal && !compilerApiKeyEnv.trim()) cMissing.push("Key Env Name");
+                if (!_isCompLocal && !compilerApiKeyValue.trim()) cMissing.push("API Key");
+                if (!currentWorkspaceId && dataMode !== "remote") cMissing.push(t("workspace.title") || "工作区");
+                return cMissing.length > 0 && !busy ? (
+                  <div className="text-[10px] text-muted-foreground text-right w-full">{t("common.missingFields") || "缺少"}: {cMissing.join(", ")}</div>
+                ) : null;
+              })()}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-        {/* ── Add STT dialog (aligned with compiler dialog) ── */}
-        {addSttDialogOpen && (
-          <ModalOverlay onClose={() => setAddSttDialogOpen(false)}>
-            <div className="modalContent">
-              <div className="dialogHeader">
-                <div className="cardTitle">{t("llm.addStt")}</div>
-                <button className="dialogCloseBtn" onClick={() => { setAddSttDialogOpen(false); setConnTestResult(null); }}><IconX size={14} /></button>
-              </div>
-              <div className="dialogBody">
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.provider")}</div>
+        {/* ── Add STT dialog ── */}
+        <Dialog open={addSttDialogOpen} onOpenChange={(open) => { if (!open) { setAddSttDialogOpen(false); setConnTestResult(null); } }}>
+          <DialogContent className="sm:max-w-[480px] max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <DialogHeader className="px-6 pt-5 pb-3 shrink-0">
+              <DialogTitle>{t("llm.addStt")}</DialogTitle>
+              <DialogDescription className="sr-only">{t("llm.addStt")}</DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
+              {/* Provider */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.provider")}</Label>
                 <ProviderSearchSelect
                   value={sttProviderSlug}
                   onChange={(slug) => {
@@ -4968,77 +4930,68 @@ export function App() {
                   extraOptions={[{ value: "__custom__", label: t("llm.customProvider") }]}
                 />
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.baseUrl")}</div>
-                <input value={sttBaseUrl} onChange={(e) => setSttBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-                <div className="cardHint" style={{ fontSize: 11, marginTop: 2 }}>{t("llm.baseUrlHint")}</div>
+
+              {/* Base URL */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.baseUrl")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.baseUrlHint")}</span></Label>
+                <Input value={sttBaseUrl} onChange={(e) => setSttBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.apiKeyEnv")}</div>
-                <input value={sttApiKeyEnv} onChange={(e) => setSttApiKeyEnv(e.target.value)} placeholder="MY_API_KEY" />
+
+              {/* API Key Env */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.apiKeyEnv")}</Label>
+                <Input value={sttApiKeyEnv} onChange={(e) => setSttApiKeyEnv(e.target.value)} placeholder="MY_API_KEY" />
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">API Key {isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) && <span style={{ color: "var(--muted)", fontSize: 11, fontWeight: 400 }}>({t("llm.localNoKey")})</span>}</div>
-                <input value={sttApiKeyValue} onChange={(e) => setSttApiKeyValue(e.target.value)} placeholder={isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} type="password" />
-                {isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, color: "var(--brand)" }}>{t("llm.localHint")}</div>
-                )}
+
+              {/* API Key */}
+              <div className="space-y-1.5">
+                <Label>API Key {isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) && <span className="text-muted-foreground text-[11px] font-normal">({t("llm.localNoKey")})</span>}</Label>
+                <Input value={sttApiKeyValue} onChange={(e) => setSttApiKeyValue(e.target.value)} placeholder={isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) ? t("llm.localKeyPlaceholder") : "sk-..."} type="password" />
+                {isLocalProvider(providers.find((p) => p.slug === sttProviderSlug)) && <p className="text-xs text-primary">{t("llm.localHint")}</p>}
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("status.model")}</div>
+
+              {/* Model */}
+              <div className="space-y-1.5">
+                <Label>{t("status.model")} <span className="text-[11px] font-normal text-muted-foreground/70">自行输入或<Button variant="link" size="xs" data-slot="label-link" className="h-auto p-0 text-[11px] text-primary hover:text-primary/80" onClick={doFetchSttModels} disabled={(!sttApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === sttProviderSlug))) || !sttBaseUrl.trim() || !!busy}>拉取模型列表</Button>并选择{sttModels.length > 0 && <span className="text-muted-foreground/50">（已拉取 {sttModels.length} 个）</span>}</span></Label>
                 <SearchSelect value={sttModel} onChange={(v) => setSttModel(v)} options={sttModels.map((m) => m.id)} placeholder={sttModels.length > 0 ? t("llm.searchModel") : t("llm.modelPlaceholder")} disabled={!!busy} />
-                {sttModels.length === 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.7 }}>{t("llm.modelManualHint")}</span>
-                    <button onClick={doFetchSttModels} className="btnSmall" disabled={(!sttApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === sttProviderSlug))) || !sttBaseUrl.trim() || !!busy}
-                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                      {t("llm.fetchModels")}
-                    </button>
-                  </div>
-                )}
-                {sttModels.length > 0 && (
-                  <div className="help" style={{ marginTop: 4, paddingLeft: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ opacity: 0.6 }}>{STT_RECOMMENDED_MODELS[sttProviderSlug] ? "" : t("llm.modelFetched", { count: sttModels.length })}</span>
-                    <button onClick={doFetchSttModels} className="btnSmall" disabled={(!sttApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === sttProviderSlug))) || !sttBaseUrl.trim() || !!busy}
-                      style={{ fontSize: 11, padding: "2px 10px", borderRadius: 6 }}>
-                      {t("llm.fetchModels")}
-                    </button>
-                  </div>
-                )}
                 {(() => {
                   const rec = STT_RECOMMENDED_MODELS[sttProviderSlug];
                   if (!rec?.length) return null;
                   return (
-                    <div className="help" style={{ marginTop: 4, paddingLeft: 2, fontSize: 11, opacity: 0.7, lineHeight: 1.6 }}>
+                    <div className="mt-1 text-xs text-muted-foreground/70 leading-relaxed">
                       {rec.map((m) => (
-                        <span key={m.id} style={{ marginRight: 12 }}>
-                          <code style={{ background: "rgba(0,0,0,0.05)", padding: "1px 5px", borderRadius: 4, cursor: "pointer" }} onClick={() => setSttModel(m.id)}>{m.id}</code>
-                          {m.note && <span style={{ marginLeft: 3, color: "var(--brand)" }}>{m.note}</span>}
+                        <span key={m.id} className="mr-3">
+                          <code className="bg-muted/50 px-1.5 py-0.5 rounded cursor-pointer hover:bg-muted transition-colors" onClick={() => setSttModel(m.id)}>{m.id}</code>
+                          {m.note && <span className="ml-1 text-primary">{m.note}</span>}
                         </span>
                       ))}
                     </div>
                   );
                 })()}
               </div>
-              <div className="dialogSection">
-                <div className="dialogLabel">{t("llm.endpointName")} <span style={{ color: "var(--muted)", fontSize: 11 }}>({t("common.optional")})</span></div>
-                <input value={sttEndpointName} onChange={(e) => setSttEndpointName(e.target.value)} placeholder={`stt-${sttProviderSlug || "custom"}-${sttModel || "model"}`} />
-              </div>
-              </div>
 
-              {connTestResult && (
-                <div className={`connTestResult ${connTestResult.ok ? "connTestOk" : "connTestFail"}`}>
-                  {connTestResult.ok
-                    ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
-                    : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
-                </div>
-              )}
+              {/* Endpoint Name */}
+              <div className="space-y-1.5">
+                <Label>{t("llm.endpointName")} <span className="text-[11px] font-normal text-muted-foreground/70">({t("common.optional")})</span></Label>
+                <Input value={sttEndpointName} onChange={(e) => setSttEndpointName(e.target.value)} placeholder={`stt-${sttProviderSlug || "custom"}-${sttModel || "model"}`} />
+              </div>
+            </div>
 
-              <div className="dialogFooter">
-                <button className="btnSecondary endpointFooterBtn" onClick={() => { setAddSttDialogOpen(false); setConnTestResult(null); }}>{t("common.cancel")}</button>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <button
-                    className="btnSecondary endpointFooterBtn"
+            {connTestResult && (
+              <div className={cn("mx-6 px-3 py-2 rounded-lg text-xs leading-relaxed shrink-0",
+                connTestResult.ok ? "bg-emerald-500/8 border border-emerald-500/25 text-emerald-600" : "bg-red-500/6 border border-red-500/20 text-red-600"
+              )}>
+                {connTestResult.ok
+                  ? `${t("llm.testSuccess")} · ${connTestResult.latencyMs}ms · ${t("llm.testModelCount", { count: connTestResult.modelCount ?? 0 })}`
+                  : `${t("llm.testFailed")}：${connTestResult.error} (${connTestResult.latencyMs}ms)`}
+              </div>
+            )}
+
+            <DialogFooter className="px-6 py-2.5 shrink-0 flex-col sm:flex-col gap-1.5">
+              <div className="flex items-center justify-between w-full">
+                <Button variant="ghost" onClick={() => { setAddSttDialogOpen(false); setConnTestResult(null); }}>{t("common.cancel")}</Button>
+                <div className="flex gap-2 items-center">
+                  <Button variant="secondary"
                     disabled={(!sttApiKeyValue.trim() && !isLocalProvider(providers.find((p) => p.slug === sttProviderSlug))) || !sttBaseUrl.trim() || connTesting}
                     onClick={() => { const _sp = providers.find((p) => p.slug === sttProviderSlug); doTestConnection({
                       testApiType: sttApiType,
@@ -5048,7 +5001,7 @@ export function App() {
                     }); }}
                   >
                     {connTesting ? t("llm.testTesting") : t("llm.testConnection")}
-                  </button>
+                  </Button>
                   {(() => {
                     const _isSttLocal = isLocalProvider(providers.find((p) => p.slug === sttProviderSlug));
                     const sMissing: string[] = [];
@@ -5057,23 +5010,26 @@ export function App() {
                     if (!currentWorkspaceId && dataMode !== "remote") sMissing.push(t("workspace.title") || "工作区");
                     const sBtnDisabled = sMissing.length > 0 || !!busy;
                     return (
-                      <div className="endpointPrimaryWrap">
-                        <button className="btnPrimary endpointFooterBtn" onClick={async () => { const ok = await doSaveSttEndpoint(); if (ok) { setAddSttDialogOpen(false); setConnTestResult(null); } }} disabled={sBtnDisabled}>
-                          {t("llm.addStt")}
-                        </button>
-                        <span className="endpointPrimaryHint">
-                          {sBtnDisabled && !busy && sMissing.length > 0 ? (
-                            <>{t("common.missingFields") || "缺少"}: {sMissing.join(", ")}</>
-                          ) : null}
-                        </span>
-                      </div>
+                      <Button onClick={async () => { const ok = await doSaveSttEndpoint(); if (ok) { setAddSttDialogOpen(false); setConnTestResult(null); } }} disabled={sBtnDisabled}>
+                        {t("llm.addStt")}
+                      </Button>
                     );
                   })()}
                 </div>
               </div>
-            </div>
-          </ModalOverlay>
-        )}
+              {(() => {
+                const _isSttLocal = isLocalProvider(providers.find((p) => p.slug === sttProviderSlug));
+                const sMissing: string[] = [];
+                if (!sttModel.trim()) sMissing.push(t("status.model"));
+                if (!_isSttLocal && !sttApiKeyValue.trim()) sMissing.push("API Key");
+                if (!currentWorkspaceId && dataMode !== "remote") sMissing.push(t("workspace.title") || "工作区");
+                return sMissing.length > 0 && !busy ? (
+                  <div className="text-[10px] text-muted-foreground text-right w-full">{t("common.missingFields") || "缺少"}: {sMissing.join(", ")}</div>
+                ) : null;
+              })()}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </>
     );
   }
