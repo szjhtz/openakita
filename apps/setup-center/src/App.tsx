@@ -5044,9 +5044,8 @@ export function App() {
   // FieldText/FieldBool/FieldSelect/FieldCombo/TelegramPairingCodeHint -> ./components/EnvFields.tsx
   // Wrapper closures that pass envDraft/onEnvChange automatically to extracted field components
   const _envBase = { envDraft, onEnvChange: setEnvDraft, busy };
-  const _secretCtx = { secretShown, onToggleSecret: (k: string) => setSecretShown((m: Record<string, boolean>) => ({ ...m, [k]: !m[k] })) };
   const FT = (p: { k: string; label: string; placeholder?: string; help?: string; type?: "text" | "password" }) =>
-    <FieldText key={p.k} {...p} {..._envBase} {..._secretCtx} />;
+    <FieldText key={p.k} {...p} {..._envBase} />;
   const FB = (p: { k: string; label: string; help?: string; defaultValue?: boolean }) =>
     <FieldBool key={p.k} {...p} {..._envBase} />;
   const FS = (p: { k: string; label: string; options: { value: string; label: string }[]; help?: string }) =>
@@ -5067,8 +5066,7 @@ export function App() {
   }
 
   const _configViewProps = {
-    envDraft, setEnvDraft, busy, secretShown,
-    onToggleSecret: (k: string) => setSecretShown((m: Record<string, boolean>) => ({ ...m, [k]: !m[k] })),
+    envDraft, setEnvDraft, busy,
     currentWorkspaceId, setNotice,
   };
 
@@ -5100,14 +5098,16 @@ export function App() {
     return (
       <>
         <div className="card">
-          <div className="cardTitle">{t("config.toolsTitle")}</div>
-          <div className="cardHint">{t("config.toolsHint")}</div>
-          <div className="divider" />
+          <h3 className="text-base font-bold tracking-tight">{t("config.toolsTitle")}</h3>
+          <p className="text-sm text-muted-foreground mt-1 mb-3">{t("config.toolsHint")}</p>
 
           {/* ── MCP (open by default, browser enabled) ── */}
-          <details className="configDetails" open>
-            <summary>{t("config.toolsMCP")}</summary>
-            <div className="configDetailsBody">
+          <details className="group rounded-lg border border-border" open>
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180 text-muted-foreground" />
+              {t("config.toolsMCP")}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
               {FB({ k: "MCP_ENABLED", label: t("config.toolsMCPEnable"), help: t("config.toolsMCPEnableHelp") })}
               <div className="grid2">
                 {FB({ k: "MCP_BROWSER_ENABLED", label: "Browser MCP", help: t("config.toolsMCPBrowserHelp") })}
@@ -5128,18 +5128,24 @@ export function App() {
           </details>
 
           {/* ── Desktop Automation (open by default, enabled) ── */}
-          <details className="configDetails" open>
-            <summary>{t("config.toolsDesktop")}</summary>
-            <div className="configDetailsBody">
+          <details className="group/desktop rounded-lg border border-border mt-2" open>
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/desktop:rotate-180 text-muted-foreground" />
+              {t("config.toolsDesktop")}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
               {FB({ k: "DESKTOP_ENABLED", label: t("config.toolsDesktopEnable"), help: t("config.toolsDesktopHelp") })}
               <div className="grid3">
                 {FT({ k: "DESKTOP_DEFAULT_MONITOR", label: t("config.toolsMonitor"), placeholder: "0" })}
                 {FT({ k: "DESKTOP_MAX_WIDTH", label: t("config.toolsMaxW"), placeholder: "1920" })}
                 {FT({ k: "DESKTOP_MAX_HEIGHT", label: t("config.toolsMaxH"), placeholder: "1080" })}
               </div>
-              <details className="configDetails">
-                <summary>{t("config.toolsDesktopAdvanced")}</summary>
-                <div className="configDetailsBody">
+              <details className="group/deskadv rounded-lg border border-border">
+                <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors text-muted-foreground">
+                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/deskadv:rotate-180" />
+                  {t("config.toolsDesktopAdvanced")}
+                </summary>
+                <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
                   <div className="grid3">
                     {FT({ k: "DESKTOP_COMPRESSION_QUALITY", label: t("config.toolsCompression"), placeholder: "85" })}
                     {FT({ k: "DESKTOP_CACHE_TTL", label: "Cache TTL", placeholder: "1.0" })}
@@ -5161,9 +5167,12 @@ export function App() {
           </details>
 
           {/* ── Model Downloads & Voice Recognition (prominent, open by default) ── */}
-          <details className="configDetails" open>
-            <summary>{t("config.toolsDownloadVoice")}</summary>
-            <div className="configDetailsBody">
+          <details className="group/dl rounded-lg border border-border mt-2" open>
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/dl:rotate-180 text-muted-foreground" />
+              {t("config.toolsDownloadVoice")}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
               <div className="grid2">
                 {FS({ k: "MODEL_DOWNLOAD_SOURCE", label: t("config.agentDownloadSource"), options: [
                   { value: "auto", label: "Auto (自动选择最快源)" },
@@ -5191,9 +5200,12 @@ export function App() {
           </details>
 
           {/* ── Network & Proxy ── */}
-          <details className="configDetails">
-            <summary>{t("config.toolsNetwork")}</summary>
-            <div className="configDetailsBody">
+          <details className="group/net rounded-lg border border-border mt-2">
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/net:rotate-180 text-muted-foreground" />
+              {t("config.toolsNetwork")}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
               <div className="grid3">
                 {FT({ k: "HTTP_PROXY", label: "HTTP_PROXY", placeholder: "http://127.0.0.1:7890" })}
                 {FT({ k: "HTTPS_PROXY", label: "HTTPS_PROXY", placeholder: "http://127.0.0.1:7890" })}
@@ -5207,61 +5219,69 @@ export function App() {
           </details>
 
           {/* ── Other ── */}
-          <details className="configDetails">
-            <summary>{t("config.toolsOther")}</summary>
-            <div className="configDetailsBody">
+          <details className="group/other rounded-lg border border-border mt-2">
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/other:rotate-180 text-muted-foreground" />
+              {t("config.toolsOther")}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
               <div className="grid2">
                 {FT({ k: "FORCE_TOOL_CALL_MAX_RETRIES", label: t("config.toolsForceRetry"), placeholder: "1" })}
               </div>
             </div>
           </details>
 
-          <div className="divider" />
-
           {/* ── Skills (collapsed, at bottom) ── */}
-          <details className="configDetails">
-            <summary>{t("config.toolsSkills")} {skillsDetail ? `(${systemSkills.length + externalSkills.length})` : ""}</summary>
-            <div className="configDetailsBody">
-              <div className="row" style={{ justifyContent: "flex-end", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                <button className="btnSmall" onClick={() => {
+          <details className="group/skills rounded-lg border border-border mt-3">
+            <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/skills:rotate-180 text-muted-foreground" />
+              {t("config.toolsSkills")} {skillsDetail ? `(${systemSkills.length + externalSkills.length})` : ""}
+            </summary>
+            <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
+              <div className="flex justify-end gap-1.5 flex-wrap">
+                <Button variant="outline" size="sm" onClick={() => {
                   if (!skillsDetail) return; setSkillsTouched(true);
                   const m: Record<string, boolean> = {};
                   for (const s of skillsDetail) m[s.skill_id] = true;
                   setSkillsSelection(m);
-                }} disabled={!skillsDetail || !!busy}>{t("config.toolsEnableAll")}</button>
-                <button className="btnSmall" onClick={() => {
+                }} disabled={!skillsDetail || !!busy}>{t("config.toolsEnableAll")}</Button>
+                <Button variant="outline" size="sm" onClick={() => {
                   if (!skillsDetail) return; setSkillsTouched(true);
                   const m: Record<string, boolean> = {};
                   for (const s of skillsDetail) m[s.skill_id] = !!s.system;
                   setSkillsSelection(m);
-                }} disabled={!skillsDetail || !!busy}>{t("config.toolsSystemOnly")}</button>
-                <button className="btnSmall" onClick={doRefreshSkills} disabled={!currentWorkspaceId || !!busy}>{t("config.toolsRefresh")}</button>
-                <button className="btnSmall btnSmallPrimary" onClick={doSaveSkillsSelection}
-                  disabled={!currentWorkspaceId || !skillsDetail || !!busy}>{t("config.toolsSaveSkills")}</button>
+                }} disabled={!skillsDetail || !!busy}>{t("config.toolsSystemOnly")}</Button>
+                <Button variant="outline" size="sm" onClick={doRefreshSkills} disabled={!currentWorkspaceId || !!busy}>{t("config.toolsRefresh")}</Button>
+                <Button variant="default" size="sm" onClick={doSaveSkillsSelection}
+                  disabled={!currentWorkspaceId || !skillsDetail || !!busy}>{t("config.toolsSaveSkills")}</Button>
               </div>
 
               {!skillsDetail ? (
-                <div className="cardHint">{t("config.toolsNoSkills")}</div>
+                <p className="text-sm text-muted-foreground">{t("config.toolsNoSkills")}</p>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div className="flex flex-col gap-1">
                   {systemSkills.length > 0 && (
-                    <div className="help">{t("config.toolsSystemLabel", { count: systemSkills.length })}</div>
+                    <p className="text-xs text-muted-foreground">{t("config.toolsSystemLabel", { count: systemSkills.length })}</p>
                   )}
                   {systemSkills.map((s) => {
                     const lang = i18n.language?.startsWith("zh") ? "zh" : i18n.language || "zh";
                     const dName = s.name_i18n?.[lang] || s.name;
                     const dDesc = s.description_i18n?.[lang] || s.description;
                     return (
-                      <div key={s.skill_id} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
-                        <div style={{ minWidth: 0 }}><b>{dName}</b>{dName !== s.name && <span style={{ opacity: 0.4, marginLeft: 4, fontSize: 11, fontFamily: "monospace" }}>{s.name}</span>} <span className="pill" style={{ fontSize: 11 }}>{t("skills.system")}</span>
-                          <span className="help" style={{ marginLeft: 8 }}>{dDesc}</span></div>
+                      <div key={s.skill_id} className="flex items-center justify-between py-0.5">
+                        <div className="min-w-0">
+                          <span className="font-semibold text-sm">{dName}</span>
+                          {dName !== s.name && <span className="ml-1 text-[11px] font-mono text-muted-foreground/40">{s.name}</span>}
+                          <span className="ml-1.5 text-[11px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">{t("skills.system")}</span>
+                          <span className="ml-2 text-[11px] text-muted-foreground">{dDesc}</span>
+                        </div>
                       </div>
                     );
                   })}
                   {externalSkills.length > 0 && (
                     <>
-                      <div className="divider" />
-                      <div className="help">{t("config.toolsExternalLabel", { count: externalSkills.length })}</div>
+                      <div className="border-b my-1" />
+                      <p className="text-xs text-muted-foreground">{t("config.toolsExternalLabel", { count: externalSkills.length })}</p>
                     </>
                   )}
                   {externalSkills.map((s) => {
@@ -5270,11 +5290,14 @@ export function App() {
                     const dName = s.name_i18n?.[lang] || s.name;
                     const dDesc = s.description_i18n?.[lang] || s.description;
                     return (
-                      <div key={s.skill_id} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "2px 0" }}>
-                        <div style={{ flex: 1, minWidth: 0 }}><b>{dName}</b>{dName !== s.name && <span style={{ opacity: 0.4, marginLeft: 4, fontSize: 11, fontFamily: "monospace" }}>{s.name}</span>}
-                          <span className="help" style={{ marginLeft: 8 }}>{dDesc}</span></div>
-                        <label className="pill" style={{ cursor: "pointer", userSelect: "none", flexShrink: 0 }}>
-                          <input style={{ width: 14, height: 14 }} type="checkbox" checked={on}
+                      <div key={s.skill_id} className="flex items-center justify-between py-0.5">
+                        <div className="flex-1 min-w-0">
+                          <span className="font-semibold text-sm">{dName}</span>
+                          {dName !== s.name && <span className="ml-1 text-[11px] font-mono text-muted-foreground/40">{s.name}</span>}
+                          <span className="ml-2 text-[11px] text-muted-foreground">{dDesc}</span>
+                        </div>
+                        <label className="inline-flex items-center gap-1.5 text-xs shrink-0 cursor-pointer select-none px-2 py-1 rounded-md border border-border hover:bg-accent/50 transition-colors">
+                          <input className="size-3.5 accent-primary" type="checkbox" checked={on}
                             onChange={(e) => { setSkillsTouched(true); setSkillsSelection((m) => ({ ...m, [s.skill_id]: e.target.checked })); }} />
                           {t("config.enable")}
                         </label>
@@ -5291,9 +5314,8 @@ export function App() {
         {/* ── CLI 命令行工具管理 (desktop only) ── */}
         {IS_TAURI && (
         <div className="card" style={{ marginTop: 16 }}>
-          <div className="cardTitle">CLI 命令行工具</div>
-          <div className="cardHint">管理终端命令注册，注册后可在 CMD / PowerShell / 终端中直接使用 oa 或 openakita 命令。</div>
-          <div className="divider" />
+          <h3 className="text-base font-bold tracking-tight">CLI 命令行工具</h3>
+          <p className="text-sm text-muted-foreground mt-1 mb-3">管理终端命令注册，注册后可在 CMD / PowerShell / 终端中直接使用 oa 或 openakita 命令。</p>
           <CliManager />
         </div>
         )}

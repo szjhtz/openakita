@@ -7,18 +7,15 @@ type AgentSystemViewProps = {
   envDraft: EnvMap;
   setEnvDraft: (updater: (prev: EnvMap) => EnvMap) => void;
   busy: string | null;
-  secretShown: Record<string, boolean>;
-  onToggleSecret: (k: string) => void;
 };
 
 export function AgentSystemView(props: AgentSystemViewProps) {
-  const { envDraft, setEnvDraft, busy, secretShown, onToggleSecret } = props;
+  const { envDraft, setEnvDraft, busy } = props;
   const { t } = useTranslation();
 
   const _envBase = { envDraft, onEnvChange: setEnvDraft, busy };
-  const _secretCtx = { secretShown, onToggleSecret };
   const FT = (p: { k: string; label: string; placeholder?: string; help?: string; type?: "text" | "password" }) =>
-    <FieldText key={p.k} {...p} {..._envBase} {..._secretCtx} />;
+    <FieldText key={p.k} {...p} {..._envBase} />;
   const FB = (p: { k: string; label: string; help?: string; defaultValue?: boolean }) =>
     <FieldBool key={p.k} {...p} {..._envBase} />;
   const FS = (p: { k: string; label: string; options: { value: string; label: string }[]; help?: string }) =>
