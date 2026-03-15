@@ -495,6 +495,7 @@ function ChainEntryLine({ entry, onSkipStep }: { entry: ChainEntry; onSkipStep?:
           <span className="chainNarrToolName">{entry.description || entry.tool}</span>
           {isRunning && onSkipStep && (
             <button
+              data-slot="skip"
               className="chainToolSkipBtn"
               onClick={(e) => { e.stopPropagation(); onSkipStep(); }}
               title="Skip this step"
