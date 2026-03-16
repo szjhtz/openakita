@@ -353,8 +353,12 @@ Function PageLeaveReinstall
       Goto reinst_uninstall_check
     ${EndIf}
 
-    ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
-    ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
+    ; Always run old uninstaller in passive+update mode:
+    ; - /P: skip confirmation UI and auto-close (user already confirmed on our reinstall page)
+    ; - /UPDATE: preserve shortcuts, start menu entries and app data
+    ; Without /P, the old uninstaller shows its own confirmation window which may appear
+    ; behind other windows, causing the user to miss it and the uninstaller to "fail".
+    StrCpy $R1 "$R1 /P /UPDATE"
     ; _?= makes ExecWait truly synchronous (without it, uninstaller copies to
     ; temp and exits immediately). Fall back to $INSTDIR when $4 is empty.
     ${If} $4 != ""
