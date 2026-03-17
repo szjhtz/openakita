@@ -923,8 +923,9 @@ class ReasoningEngine:
                     })
                     return result
                 else:
-                    # 需要继续循环（验证不通过）
-                    await _emit_progress("🔄 任务尚未完成，继续处理...")
+                    # 需要继续循环（验证不通过 / ForceToolCall 重试）
+                    if tools_executed_in_task:
+                        await _emit_progress("🔄 任务尚未完成，继续处理...")
                     logger.info(f"[ReAct] Iter {iteration+1} — VERIFY: incomplete, continuing loop")
                     react_trace.append(_iter_trace)
                     try:
@@ -1006,7 +1007,7 @@ class ReasoningEngine:
                     ask_tool_id = ask_user_calls[0].get("id", "ask_user_0")
 
                     # 合并 LLM 的文本回复 + 问题
-                    text_part = strip_thinking_tags(decision.text_content or "").strip()
+                    text_part = clean_llm_response(decision.text_content or "")
                     if text_part and question:
                         final_text = f"{text_part}\n\n{question}"
                     elif question:
@@ -1246,8 +1247,7 @@ class ReasoningEngine:
 
                 # stop_reason 检查
                 if decision.stop_reason == "end_turn":
-                    cleaned_text = strip_thinking_tags(decision.text_content)
-                    _, cleaned_text = parse_intent_tag(cleaned_text)
+                    cleaned_text = clean_llm_response(decision.text_content)
                     if cleaned_text and cleaned_text.strip():
                         logger.info(f"[LoopGuard] stop_reason=end_turn after {consecutive_tool_rounds} rounds")
                         self._save_react_trace(react_trace, conversation_id, session_type, "completed_end_turn", _trace_started_at)
@@ -1288,7 +1288,7 @@ class ReasoningEngine:
 
                 if intervention:
                     if intervention.should_terminate:
-                        cleaned = strip_thinking_tags(decision.text_content)
+                        cleaned = clean_llm_response(decision.text_content)
                         self._save_react_trace(react_trace, conversation_id, session_type, "loop_terminated", _trace_started_at)
                         try:
                             state.transition(TaskStatus.FAILED)
@@ -1841,11 +1841,12 @@ class ReasoningEngine:
                         yield {"type": "done"}
                         return
                     else:
-                        # 验证不通过 → 继续循环
+                        # 验证不通过 / ForceToolCall 重试 → 继续循环
                         logger.info(
                             f"[ReAct-Stream] Iter {_iteration+1} — VERIFY: incomplete, continuing loop"
                         )
-                        yield {"type": "chain_text", "content": "任务尚未完成，继续处理..."}
+                        if tools_executed_in_task:
+                            yield {"type": "chain_text", "content": "任务尚未完成，继续处理..."}
                         react_trace.append(_iter_trace)
                         try:
                             state.transition(TaskStatus.VERIFYING)
@@ -1931,7 +1932,7 @@ class ReasoningEngine:
                         ask_options = ask_input.get("options")
                         ask_allow_multiple = ask_input.get("allow_multiple", False)
                         ask_questions = ask_input.get("questions")
-                        text_part = decision.text_content or ""
+                        text_part = clean_llm_response(decision.text_content or "")
                         question_text = f"{text_part}\n\n{ask_q}".strip() if text_part else ask_q
                         event: dict = {
                             "type": "ask_user",
@@ -2249,8 +2250,7 @@ class ReasoningEngine:
 
                     # stop_reason 检查
                     if decision.stop_reason == "end_turn":
-                        cleaned_text = strip_thinking_tags(decision.text_content)
-                        _, cleaned_text = parse_intent_tag(cleaned_text)
+                        cleaned_text = clean_llm_response(decision.text_content)
                         if cleaned_text and cleaned_text.strip():
                             logger.info(
                                 f"[ReAct-Stream][LoopGuard] stop_reason=end_turn after {consecutive_tool_rounds} rounds"
@@ -2289,7 +2289,7 @@ class ReasoningEngine:
 
                     if intervention:
                         if intervention.should_terminate:
-                            cleaned = strip_thinking_tags(decision.text_content)
+                            cleaned = clean_llm_response(decision.text_content)
                             self._save_react_trace(
                                 react_trace, conversation_id, session_type,
                                 "loop_terminated", _trace_started_at,
@@ -3036,8 +3036,7 @@ class ReasoningEngine:
                     no_confirmation_text_count, max_no_tool_retries) - 需要继续循环
         """
         if tools_executed_in_task:
-            cleaned_text = strip_thinking_tags(decision.text_content)
-            _, cleaned_text = parse_intent_tag(cleaned_text)
+            cleaned_text = clean_llm_response(decision.text_content)
             if cleaned_text and len(cleaned_text.strip()) > 0:
                 # 任务完成度验证
                 is_completed = await self._response_handler.verify_task_completion(

@@ -739,6 +739,8 @@
     "imageAttachment": "Image",
     "voiceAttachment": "Voice",
     "fileAttachment": "File",
+    "groupChat": "Group",
+    "privateChat": "Private",
     "tabMessages": "Messages",
     "tabBots": "Bot Config",
     "botsTitle": "IM Bot Configuration",

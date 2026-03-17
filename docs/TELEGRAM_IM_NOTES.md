@@ -227,6 +227,30 @@ Agent 生成回复
 
 ## 六、已发现问题与修复建议
 
+### 问题 0（紧急）：Agent 响应中工具调用模拟文本泄漏到 IM 通道
+
+**现象**: 用户在 Telegram 发送简单对话消息（如"什么情况"、"?"），Bot 回复中包含 `.run_shell(command="date")`、`.browser_navigate(url="...")`、`.browsergetcontent()` 等工具调用语法文本。LLM 生成的自然语言回复在日志中可见，但未发送到 Telegram；用户仅看到原始工具调用模拟文本。
+
+**根因（双层缺陷叠加）**:
+
+1. **正则缺陷** — `response_handler.py` 的 `strip_tool_simulation_text()` 中 `pattern1`：
+   ```python
+   # 改前：不匹配前导 "."，且 [^)]* 无法处理参数内含 ")" 的情况
+   pattern1 = r"^[a-z_]+\s*\([^)]*\)\s*$"
+   ```
+   导致 `.run_shell(...)`、`.browser_navigate(...)` 等 LLM 模拟的工具调用语法无法被识别和移除。
+
+2. **返回路径遗漏** — `reasoning_engine.py` 中 5 个返回路径仅调用 `strip_thinking_tags` + `parse_intent_tag`，完全跳过了包含 `strip_tool_simulation_text` 的 `clean_llm_response`：
+   - `run()` 的 `end_turn` 路径和 Supervisor 终止路径
+   - `reason_stream()` 的 `end_turn` 路径和 Supervisor 终止路径
+   - `_handle_final_answer()` 的 `tools_executed_in_task` 分支
+
+**已修复**:
+- `response_handler.py`：`pattern1` 改为 `r"^\.?[a-z_]+\s*\(.*\)\s*$"`（支持前导点号 + 贪婪匹配处理嵌套括号）
+- `reasoning_engine.py`：5 个返回路径全部统一使用 `clean_llm_response()`
+
+---
+
 ### 问题 1（高）：音频文件被错误归类为语音消息
 
 **现象**: 用户通过 Telegram 发送音频文件（音乐/播客/长录音），系统只识别到部分时长（如 24 秒），原始文件用途丢失。

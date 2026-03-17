@@ -169,6 +169,7 @@
 | 43 | ForceToolCall 对 REPLY 意图冲突重试 | `[REPLY]` intent + tool_calls=0 仍保留 1 次重试，闲聊场景模型被强制再问"是否该调工具"，产生矛盾提示和额外 token 消耗 | `intent == "REPLY"` 时直接 `return clean_llm_response()`，不重试；`[ACTION]` 和无标记保留完整重试 | reasoning_engine.py |
 | 44 | 群聊"智能判断"/"所有消息"模式无效果 | OpenAkita `group_response_mode` 只控制 gateway 过滤，飞书平台默认只投递 @提及消息 | UI 选择非"仅@时回复"时显示提示："需在飞书后台开启「接收群聊中所有消息」"；适配器启动时输出提醒日志 | IMView.tsx, feishu.py, zh.json, en.json |
 | 45 | `/feishu auth` 生成的 OAuth URL 报错 20029 | `get_auth_url()` 硬编码 `redirect_uri` 为占位值，未在飞书后台注册 | 默认不传 `redirect_uri`，让飞书平台自动使用已注册的回调地址 | feishu.py |
+| 46 | 非流式模式"思考中..."卡片残留 + 回复显示异常 | 非流式路径中 `_flush`（progress 合并发送）通过 `send_message` 发送进度文本时无条件 pop `_thinking_cards[sk]`，导致：①"思考中..."卡片被 PATCH 为思维过程文本而非最终回复；②`_keep_typing` 重建新卡片后无人消费 → 残留；③最终回复沦为独立新消息而非 PATCH 到占位卡片；④`_send_response` 前未 `flush_progress` 导致进度/回复顺序不稳定。另外飞书 adapter 缺少 `clear_typing` 兜底清理 | ①`_call_agent` 非流式路径也初始化 `_streaming_buffers[sk]` 保护 thinking card，agent 处理完 pop；②`_send_response` 前先 `flush_progress`；③飞书 adapter 新增 `clear_typing` 删除残留卡片；④`clear_typing` 调用传入 `thread_id` 以正确匹配 `sk` | gateway.py, feishu.py |
 
 ---
 

@@ -158,6 +158,10 @@ class FeishuAdapter(ChannelAdapter):
         self._seen_message_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
         self._seen_message_ids_max = 500
 
+        # 用户名缓存：open_id → display name（避免重复调 Contact API）
+        self._user_name_cache: collections.OrderedDict[str, str] = collections.OrderedDict()
+        self._user_name_cache_max = 200
+
         # "思考中..."占位卡片：session_key → 卡片 message_id
         # session_key = chat_id 或 chat_id:thread_id（话题模式）
         self._thinking_cards: dict[str, str] = {}
@@ -184,6 +188,8 @@ class FeishuAdapter(ChannelAdapter):
         self._streaming_thinking: dict[str, str] = {}
         # session_key → 思考耗时(ms)
         self._streaming_thinking_ms: dict[str, int] = {}
+        # session_key → 工具调用/结果等 chain 文本行（流式期间追加，finalize 后清理）
+        self._streaming_chain: dict[str, list[str]] = {}
 
         # Per-bot 群聊响应模式（构造参数 > 环境变量 > 全局配置）
         self._group_response_mode: str | None = group_response_mode or (
@@ -709,6 +715,7 @@ class FeishuAdapter(ChannelAdapter):
         self._streaming_finalized.discard(sk)
         self._streaming_thinking.pop(sk, None)
         self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
         if sk in self._thinking_cards:
             return
         if not self._client:
@@ -717,6 +724,19 @@ class FeishuAdapter(ChannelAdapter):
         card_msg_id = await self._send_thinking_card(chat_id, reply_to=reply_to)
         if card_msg_id:
             self._thinking_cards[sk] = card_msg_id
+
+    async def clear_typing(self, chat_id: str, thread_id: str | None = None) -> None:
+        """清理残留的"思考中..."占位卡片（安全网）。
+
+        正常路径下 send_message / finalize_stream 已消费卡片，此方法不会做
+        任何事。仅在异常路径或 _keep_typing 重建卡片后未被消费时触发。
+        """
+        sk = self._make_session_key(chat_id, thread_id)
+        card_id = self._thinking_cards.pop(sk, None)
+        if card_id:
+            logger.debug(f"Feishu: clear_typing removing leftover card {card_id}")
+            with contextlib.suppress(Exception):
+                await self._delete_feishu_message(card_id)
 
     async def _send_thinking_card(
         self, chat_id: str, reply_to: str | None = None,
@@ -851,25 +871,60 @@ class FeishuAdapter(ChannelAdapter):
         except Exception as e:
             logger.debug(f"Feishu: stream_thinking patch failed (non-fatal): {e}")
 
+    async def stream_chain_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+    ) -> None:
+        """将工具调用描述/结果摘要等 chain 文本追加到流式卡片中。"""
+        if not self.is_streaming_enabled(is_group):
+            return
+
+        sk = self._make_session_key(chat_id, thread_id)
+        self._streaming_chain.setdefault(sk, []).append(text)
+
+        card_id = self._thinking_cards.get(sk)
+        if not card_id:
+            return
+
+        now = time.time()
+        last_t = self._streaming_last_patch.get(sk, 0.0)
+        throttle_s = self._streaming_throttle_ms / 1000.0
+        if now - last_t >= throttle_s:
+            display = self._compose_thinking_display(sk)
+            try:
+                await self._patch_card_content(card_id, display)
+                self._streaming_last_patch[sk] = now
+            except Exception as e:
+                logger.debug(f"Feishu: stream_chain_text patch failed (non-fatal): {e}")
+
     def _compose_thinking_display(self, sk: str) -> str:
-        """根据当前 thinking + reply buffer 构建卡片显示内容"""
+        """根据当前 thinking + chain + reply buffer 构建卡片显示内容"""
         thinking = self._streaming_thinking.get(sk, "")
         reply = self._streaming_buffers.get(sk, "")
         dur_ms = self._streaming_thinking_ms.get(sk, 0)
+        chain_lines = self._streaming_chain.get(sk, [])
 
-        parts = []
+        parts: list[str] = []
         if thinking:
             dur_str = f" ({dur_ms / 1000:.1f}s)" if dur_ms else ""
             preview = thinking.strip()
             if len(preview) > 600:
                 preview = preview[:600] + "..."
             parts.append(f"💭 **思考过程**{dur_str}\n> {preview.replace(chr(10), chr(10) + '> ')}")
-            if reply:
-                parts.append("---")
+
+        if chain_lines:
+            visible = chain_lines[-8:]
+            parts.append("\n".join(visible))
 
         if reply:
+            if parts:
+                parts.append("---")
             parts.append(reply + " ▍")
-        elif not thinking:
+        elif not thinking and not chain_lines:
             parts.append("思考中...")
 
         return "\n".join(parts)
@@ -932,6 +987,7 @@ class FeishuAdapter(ChannelAdapter):
         self._streaming_last_patch.pop(sk, None)
         self._streaming_thinking.pop(sk, None)
         self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
 
         if not card_id:
             return False
@@ -1299,7 +1355,9 @@ class FeishuAdapter(ChannelAdapter):
         user_id = sender_id.get("user_id") or sender_id.get("open_id", "")
 
         metadata["is_group"] = chat_type == "group"
-        metadata["sender_name"] = ""
+        metadata["sender_name"] = await self._resolve_user_name(
+            sender_id.get("open_id", "")
+        )
 
         return UnifiedMessage.create(
             channel=self.channel_name,
@@ -1316,6 +1374,30 @@ class FeishuAdapter(ChannelAdapter):
             raw={"message": message, "sender": sender},
             metadata=metadata,
         )
+
+    async def _resolve_user_name(self, open_id: str) -> str:
+        """从缓存或 Contact API 获取用户显示名，失败时静默返回空字符串。"""
+        if not open_id:
+            return ""
+
+        if open_id in self._user_name_cache:
+            self._user_name_cache.move_to_end(open_id)
+            return self._user_name_cache[open_id]
+
+        if "获取用户信息" not in self._capabilities:
+            return ""
+
+        try:
+            info = await self.get_user_info(open_id)
+            name = (info or {}).get("name", "") if info else ""
+        except Exception:
+            name = ""
+
+        self._user_name_cache[open_id] = name
+        while len(self._user_name_cache) > self._user_name_cache_max:
+            self._user_name_cache.popitem(last=False)
+
+        return name
 
     def _parse_post_content(self, post: dict) -> str:
         """解析富文本内容（纯文本，不提取 MediaFile）

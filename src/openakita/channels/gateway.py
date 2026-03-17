@@ -1800,10 +1800,12 @@ class MessageGateway:
                                 is_interrupt=True,
                             )
                             self.session_manager.mark_dirty()
-                            _notify_im_event(
-                                "im:new_message",
-                                {"channel": message.channel, "role": "user"},
-                            )
+                            _notify_im_event("im:new_message", {
+                                "channel": message.channel, "role": "user",
+                                "session_id": _ins_session.session_key,
+                                "chat_type": _ins_session.chat_type,
+                                "display_name": _ins_session.display_name,
+                            })
 
                         try:
                             ok = await self.agent_handler.insert_user_message(
@@ -2237,12 +2239,21 @@ class MessageGateway:
             await self._preprocess_media(message)
 
             # 4. 获取或创建会话
+            _msg_sender_name = (message.metadata or {}).get("sender_name", "")
             session = self.session_manager.get_session(
                 channel=message.channel,
                 chat_id=message.chat_id,
                 user_id=message.user_id,
                 thread_id=message.thread_id,
+                chat_type=message.chat_type or "private",
+                display_name=_msg_sender_name,
             )
+
+            # 4.0.1 惰性更新 chat_type / display_name（已有 session 可能缺失）
+            if message.chat_type and session.chat_type != message.chat_type:
+                session.chat_type = message.chat_type
+            if _msg_sender_name and not session.display_name:
+                session.display_name = _msg_sender_name
 
             # 4.1 多Bot绑定：将 adapter 配置的 agent_profile_id 写入新 session
             self._apply_bot_agent_profile(session, message.channel)
@@ -2326,7 +2337,12 @@ class MessageGateway:
                 channel_message_id=message.channel_message_id,
             )
             self.session_manager.mark_dirty()  # 触发保存
-            _notify_im_event("im:new_message", {"channel": message.channel, "role": "user"})
+            _notify_im_event("im:new_message", {
+                "channel": message.channel, "role": "user",
+                "session_id": session.session_key,
+                "chat_type": session.chat_type,
+                "display_name": session.display_name,
+            })
 
             # 6. 调用 Agent 处理（支持中断检查 + 流式输出）
             response_text, streamed_ok = await self._call_agent(session, message)
@@ -2369,7 +2385,12 @@ class MessageGateway:
             session.add_message(role="assistant", content=response_text, **_msg_meta)
             self.session_manager.mark_dirty()
             self.session_manager.flush()
-            _notify_im_event("im:new_message", {"channel": message.channel, "role": "assistant"})
+            _notify_im_event("im:new_message", {
+                "channel": message.channel, "role": "assistant",
+                "session_id": session.session_key,
+                "chat_type": session.chat_type,
+                "display_name": session.display_name,
+            })
 
             # 9. 发送响应（流式已通过卡片 PATCH 送达则跳过）
             logger.info(
@@ -2378,6 +2399,26 @@ class MessageGateway:
                 f"preview=\"{response_text[:80]}\""
             )
             if not streamed_ok:
+                _had_progress = bool(self._progress_buffers.get(session.session_key))
+                await self.flush_progress(session)
+
+                _adapter = self._adapters.get(message.channel)
+                if _had_progress:
+                    _cp = session.get_metadata("chain_push")
+                    if _cp is None:
+                        from ..config import settings as _s
+                        _cp = _s.im_chain_push
+                    if _cp and _adapter:
+                        with contextlib.suppress(Exception):
+                            await _adapter.clear_typing(
+                                message.chat_id, thread_id=message.thread_id,
+                            )
+
+                if _adapter and hasattr(_adapter, "_streaming_buffers") and hasattr(_adapter, "_make_session_key"):
+                    _adapter._streaming_buffers.pop(
+                        _adapter._make_session_key(message.chat_id, message.thread_id), None,
+                    )
+
                 await self._send_response(message, response_text)
 
             # 10. 处理剩余的中断消息
@@ -2409,11 +2450,15 @@ class MessageGateway:
                 typing_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await typing_task
-            # 清除"思考中"提示消息（QQ 官方等需要撤回文本提示的平台）
+            # 清除"思考中"提示消息（飞书/QQ 官方等需要撤回文本提示的平台）
             _adapter = self._adapters.get(message.channel)
             if _adapter:
                 with contextlib.suppress(Exception):
-                    await _adapter.clear_typing(message.chat_id)
+                    await _adapter.clear_typing(message.chat_id, thread_id=message.thread_id)
+                if hasattr(_adapter, "_streaming_buffers") and hasattr(_adapter, "_make_session_key"):
+                    _adapter._streaming_buffers.pop(
+                        _adapter._make_session_key(message.chat_id, message.thread_id), None,
+                    )
             # 标记会话处理完成
             async with self._interrupt_lock:
                 self._mark_session_processing(session_key, False)
@@ -2875,6 +2920,14 @@ class MessageGateway:
                     session, input_text, message, adapter,
                 )
             else:
+                if (
+                    adapter is not None
+                    and hasattr(adapter, "_streaming_buffers")
+                    and hasattr(adapter, "_make_session_key")
+                ):
+                    _sk = adapter._make_session_key(message.chat_id, message.thread_id)
+                    adapter._streaming_buffers.setdefault(_sk, "")
+
                 response = await self.agent_handler(session, input_text)
 
             # 清除临时数据
@@ -2944,16 +2997,23 @@ class MessageGateway:
                         sk = adapter._make_session_key(message.chat_id, message.thread_id) if hasattr(adapter, "_make_session_key") else ""
                         if sk and hasattr(adapter, "_streaming_thinking_ms") and dur_ms:
                             adapter._streaming_thinking_ms[sk] = dur_ms
-                    if chain_push and _thinking_buf:
+                    if not can_stream_thinking and chain_push and _thinking_buf:
                         preview = _thinking_buf.strip().replace("\n", " ")[:120]
                         if len(_thinking_buf) > 120:
                             preview += "..."
                         await self.emit_progress_event(session, f"💭 {preview}")
-                        _thinking_buf = ""
+                    _thinking_buf = ""
                 elif etype == "chain_text" and chain_push:
                     content = event.get("content", "")
                     if content:
-                        await self.emit_progress_event(session, content)
+                        if can_stream_thinking and hasattr(adapter, "stream_chain_text"):
+                            await adapter.stream_chain_text(
+                                message.chat_id, content,
+                                thread_id=message.thread_id,
+                                is_group=is_group,
+                            )
+                        else:
+                            await self.emit_progress_event(session, content)
                 elif etype == "ask_user":
                     if not reply_text:
                         reply_text = event.get("question", "")
@@ -3443,7 +3503,15 @@ class MessageGateway:
                 except Exception:
                     reply_to = None
 
-                await self.send_to_session(session, combined, role=role, reply_to=reply_to)
+                await self.send(
+                    channel=session.channel,
+                    chat_id=session.chat_id,
+                    text=combined,
+                    record_to_session=False,
+                    reply_to=reply_to,
+                )
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 logger.warning(f"[Progress] flush failed: {e}")
 
@@ -3459,10 +3527,12 @@ class MessageGateway:
             return
         session_key = session.session_key
 
-        # 取消未触发的延迟 flush task
+        # 等待已运行的 flush task 完成，确保进度消息在回复前送达
         existing = self._progress_flush_tasks.pop(session_key, None)
         if existing and not existing.done():
             existing.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await existing
 
         lines = self._progress_buffers.get(session_key, [])
         if not lines:
@@ -3484,7 +3554,13 @@ class MessageGateway:
             reply_to = None
 
         try:
-            await self.send_to_session(session, combined, role="system", reply_to=reply_to)
+            await self.send(
+                channel=session.channel,
+                chat_id=session.chat_id,
+                text=combined,
+                record_to_session=False,
+                reply_to=reply_to,
+            )
         except Exception as e:
             logger.warning(f"[Progress] flush_progress failed: {e}")
 

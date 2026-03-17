@@ -1,5 +1,6 @@
 """Agent profile API routes."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request
@@ -8,6 +9,9 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_deleting_bot_ids: set[str] = set()
+_deleting_lock = asyncio.Lock()
 
 # Valid IM bot types
 VALID_BOT_TYPES = frozenset({"feishu", "telegram", "dingtalk", "wework", "wework_ws", "onebot", "onebot_reverse", "qqbot"})
@@ -158,24 +162,33 @@ async def update_bot(bot_id: str, body: BotUpdateRequest):
 
 @router.delete("/api/agents/bots/{bot_id}")
 async def delete_bot(bot_id: str):
-    """Remove a bot."""
-    from openakita.config import runtime_state, settings
+    """Remove a bot (idempotent & mutex-protected)."""
+    async with _deleting_lock:
+        if bot_id in _deleting_bot_ids:
+            return {"status": "ok", "detail": "already deleting"}
+        _deleting_bot_ids.add(bot_id)
 
-    bots = list(settings.im_bots)
-    deleted = [b for b in bots if isinstance(b, dict) and b.get("id") == bot_id]
-    new_bots = [b for b in bots if isinstance(b, dict) and b.get("id") != bot_id]
-    if len(new_bots) == len(bots):
-        raise HTTPException(status_code=404, detail=f"bot '{bot_id}' not found")
+    try:
+        from openakita.config import runtime_state, settings
 
-    settings.im_bots = new_bots
-    runtime_state.save()
-    logger.info(f"[Agents API] Deleted bot: {bot_id}")
+        bots = list(settings.im_bots)
+        deleted = [b for b in bots if isinstance(b, dict) and b.get("id") == bot_id]
+        new_bots = [b for b in bots if isinstance(b, dict) and b.get("id") != bot_id]
+        if len(new_bots) == len(bots):
+            return {"status": "ok", "detail": "bot already removed"}
 
-    if deleted:
-        from openakita.main import remove_im_bot
-        await remove_im_bot(deleted[0])
+        settings.im_bots = new_bots
+        runtime_state.save()
+        logger.info(f"[Agents API] Deleted bot: {bot_id}")
 
-    return {"status": "ok"}
+        if deleted:
+            from openakita.main import remove_im_bot
+            await remove_im_bot(deleted[0])
+
+        return {"status": "ok"}
+    finally:
+        async with _deleting_lock:
+            _deleting_bot_ids.discard(bot_id)
 
 
 @router.post("/api/agents/bots/{bot_id}/toggle")

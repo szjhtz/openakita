@@ -739,6 +739,8 @@
     "imageAttachment": "图片",
     "voiceAttachment": "语音",
     "fileAttachment": "文件",
+    "groupChat": "群聊",
+    "privateChat": "私聊",
     "tabMessages": "消息",
     "tabBots": "Bot 配置",
     "botsTitle": "IM Bot 配置",

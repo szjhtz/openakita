@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import {
   IconIM, IconMessageCircle, IconRefresh, IconFile, IconImage, IconVolume,
   IconBot, IconPlus, IconEdit, IconTrash,
+  IconUser, IconUsers,
   DotGreen, DotGray,
 } from "../icons";
 import { safeFetch } from "../providers";
@@ -28,6 +29,8 @@ type IMSession = {
   channel: string;
   chatId: string | null;
   userId: string | null;
+  chatType?: string;
+  displayName?: string;
   state: string;
   lastActive: string;
   messageCount: number;
@@ -152,100 +155,6 @@ export function IMView({
   const { t } = useTranslation();
   const api = apiBaseUrl ?? DEFAULT_API;
   const [tab, setTab] = useState<"messages" | "bots">("messages");
-  const [channels, setChannels] = useState<IMChannel[]>([]);
-  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<IMSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<IMMessage[]>([]);
-  const [totalMessages, setTotalMessages] = useState(0);
-  const [loading, setLoading] = useState(false);
-
-  const getChannelDisplayName = useCallback((ch: IMChannel): string => {
-    const key = `status.${(ch.channel || "").toLowerCase()}`;
-    const translated = t(key);
-    return translated && translated !== key ? translated : (ch.name || ch.channel);
-  }, [t]);
-
-  const fetchChannels = useCallback(async () => {
-    if (!serviceRunning) return;
-    try {
-      const res = await safeFetch(`${api}/api/im/channels`);
-      const data = await res.json();
-      setChannels(data.channels || []);
-    } catch { /* ignore */ }
-  }, [serviceRunning, api]);
-
-  const fetchSessions = useCallback(async (channel: string): Promise<IMSession[]> => {
-    if (!serviceRunning) return [];
-    try {
-      const res = await safeFetch(`${api}/api/im/sessions?channel=${encodeURIComponent(channel)}`);
-      const data = await res.json();
-      const list: IMSession[] = data.sessions || [];
-      setSessions(list);
-      return list;
-    } catch { /* ignore */ }
-    return [];
-  }, [serviceRunning, api]);
-
-  const fetchMessages = useCallback(async (sessionId: string, limit = 50, offset = 0) => {
-    if (!serviceRunning) return;
-    try {
-      const res = await safeFetch(`${api}/api/im/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&offset=${offset}`);
-      const data = await res.json();
-      setMessages(data.messages || []);
-      setTotalMessages(data.total || 0);
-    } catch { /* ignore */ }
-  }, [serviceRunning, api]);
-
-  useEffect(() => {
-    fetchChannels();
-  }, [fetchChannels]);
-
-  useEffect(() => {
-    if (!serviceRunning) return;
-    const channelTimer = setInterval(() => {
-      fetchChannels();
-      if (selectedChannel) fetchSessions(selectedChannel);
-    }, IS_WEB ? 60_000 : 15000);
-    return () => clearInterval(channelTimer);
-  }, [serviceRunning, selectedChannel, fetchChannels, fetchSessions]);
-
-  useEffect(() => {
-    if (!serviceRunning || !selectedSessionId) return;
-    fetchMessages(selectedSessionId);
-    const msgTimer = setInterval(() => {
-      fetchMessages(selectedSessionId);
-    }, IS_WEB ? 30_000 : 8000);
-    return () => clearInterval(msgTimer);
-  }, [serviceRunning, selectedSessionId, fetchMessages]);
-
-  useEffect(() => {
-    if (!IS_WEB) return;
-    return onWsEvent((event) => {
-      if (event === "im:channel_status") fetchChannels();
-      if (event === "im:new_message") {
-        if (selectedChannel) fetchSessions(selectedChannel);
-        if (selectedSessionId) fetchMessages(selectedSessionId);
-      }
-    });
-  }, [fetchChannels, fetchSessions, fetchMessages, selectedChannel, selectedSessionId]);
-
-  const handleSelectChannel = useCallback(async (ch: string) => {
-    setSelectedChannel(ch);
-    setSelectedSessionId(null);
-    setMessages([]);
-    const list = await fetchSessions(ch);
-    if (list.length > 0) {
-      const first = list[0];
-      setSelectedSessionId(first.sessionId);
-      fetchMessages(first.sessionId);
-    }
-  }, [fetchSessions, fetchMessages]);
-
-  const handleSelectSession = useCallback((sid: string) => {
-    setSelectedSessionId(sid);
-    fetchMessages(sid);
-  }, [fetchMessages]);
 
   if (!serviceRunning) {
     return (
@@ -375,10 +284,14 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
 
   useEffect(() => {
     if (!IS_WEB) return;
-    return onWsEvent((event) => {
+    return onWsEvent((event, data) => {
       if (event === "im:channel_status") fetchChannels();
       if (event === "im:new_message") {
-        if (selectedChannel) fetchSessions(selectedChannel);
+        const d = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+        const evtChannel = d.channel as string | undefined;
+        if (selectedChannel && (!evtChannel || evtChannel === selectedChannel)) {
+          fetchSessions(selectedChannel);
+        }
         if (selectedSessionId) fetchMessages(selectedSessionId);
       }
     });
@@ -442,9 +355,15 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
                   role="button"
                   tabIndex={0}
                 >
-                  <div className="imSessionId">{s.userId || s.chatId || s.sessionId.slice(0, 12)}</div>
-                  <div className="imSessionMeta">
-                    {s.messageCount} {t("im.messages")} · {s.lastActive ? new Date(s.lastActive).toLocaleTimeString() : ""}
+                  <div className="imSessionLeft">
+                    {s.chatType === "group" ? <IconUsers size={13} /> : <IconUser size={13} />}
+                    <span className="imSessionName">{s.displayName || s.userId || s.chatId || s.sessionId.slice(0, 12)}</span>
+                  </div>
+                  <div className="imSessionRight">
+                    <span className="imSessionCount">{s.messageCount}</span>
+                    <span className="imSessionTime">
+                      {s.lastActive ? new Date(s.lastActive).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                    </span>
                   </div>
                 </div>
               ))}

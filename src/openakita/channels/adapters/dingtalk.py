@@ -706,7 +706,11 @@ class DingTalkAdapter(ChannelAdapter):
             return f"stream_finalized_{sk}"
 
         # ---- 思考卡片处理：尝试更新占位卡片为最终回复 ----
-        card_biz_id = self._thinking_cards.pop(message.chat_id, None)
+        # 流式/非流式保护期间跳过，避免进度消息消费卡片
+        if sk in self._streaming_buffers:
+            card_biz_id = None
+        else:
+            card_biz_id = self._thinking_cards.pop(message.chat_id, None)
         if card_biz_id:
             text = message.content.text or ""
             if text and not message.content.has_media:
