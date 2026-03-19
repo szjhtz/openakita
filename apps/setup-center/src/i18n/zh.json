@@ -71,7 +71,13 @@
     "noData": "暂无数据",
     "sessions": "按会话",
     "disclaimer": "⚠ 本地 token 计算与服务商算法无法保证完全一致，实际用量以服务商账单为准，此处统计仅供参考。",
-    "estimatedCost": "预估费用"
+    "estimatedCost": "预估费用",
+    "period1d": "1天",
+    "period3d": "3天",
+    "period1w": "1周",
+    "period1m": "1月",
+    "period6m": "半年",
+    "period1y": "1年"
   },
   "chat": {
     "placeholder": "输入消息... (Enter 发送, Shift+Enter 换行)",
@@ -156,7 +162,17 @@
     "busyOnOtherDevice": "该会话正在其他终端进行中",
     "busyNewConversation": "新建会话",
     "busyHint": "您可以新建会话继续对话",
-    "conversationBusy": "会话忙碌"
+    "conversationBusy": "会话忙碌",
+    "thinkingOn": "思考模式: 开启深度思考",
+    "thinkingOff": "思考模式: 关闭深度思考",
+    "thinkingAuto": "思考模式: 自动",
+    "depthLow": "低",
+    "depthMedium": "中",
+    "depthHigh": "高",
+    "depthTipLow": "思考程度: 低 — 快速响应",
+    "depthTipMedium": "思考程度: 中 — 平衡模式",
+    "depthTipHigh": "思考程度: 高 — 深度推理",
+    "depthClickToSwitch": "点击切换"
   },
   "skills": {
     "title": "技能管理",
@@ -487,6 +503,8 @@
     "toolsSkillsEnabled": "已启用",
     "toolsSkillsDisabled": "已禁用",
     "toolsEnableAll": "启用全部",
+    "toolsDisableAll": "禁用全部",
+    "toolsSkillsCount": "{{enabled}} / {{total}} 已启用",
     "toolsSystemOnly": "仅系统",
     "toolsRefresh": "刷新",
     "toolsSaveSkills": "保存",
@@ -534,6 +552,9 @@
     "agentName": "Agent 名称",
     "agentMaxIter": "最大迭代",
     "agentThinking": "Thinking 模式",
+    "agentThinkingAuto": "auto (自动判断)",
+    "agentThinkingAlways": "always (始终思考)",
+    "agentThinkingNever": "never (从不思考)",
     "agentFastModel": "快速模型",
     "agentAutoConfirm": "自动确认（慎用）",
     "agentProactive": "主动行为",
@@ -650,7 +671,23 @@
     "multiAgentMode": "多Agent模式",
     "multiAgentBeta": "Beta",
     "multiAgentOn": "多Agent模式已启用",
-    "multiAgentOff": "单Agent模式"
+    "multiAgentOff": "单Agent模式",
+    "cliTitle": "CLI 命令行工具",
+    "cliDesc": "管理终端命令注册，注册后可在 CMD / PowerShell / 终端中直接使用 oa 或 openakita 命令。",
+    "cliRegistered": "已注册命令",
+    "cliInPath": "已在 PATH 中",
+    "cliNotInPath": "未在 PATH 中",
+    "cliDirLabel": "目录:",
+    "cliCmdFull": "完整命令",
+    "cliCmdShort": "简短别名",
+    "cliAddToPath": "添加到系统 PATH",
+    "cliUpdate": "更新注册",
+    "cliRegister": "注册",
+    "cliUnregisterAll": "注销全部",
+    "cliSelectOne": "请至少选择一个命令名称",
+    "cliStatusError": "查询 CLI 状态失败:",
+    "cliRegisterFailed": "注册失败:",
+    "cliUnregisterFailed": "注销失败:"
   },
   "scheduler": {
     "title": "计划任务",
@@ -726,7 +763,13 @@
     "tabCompleted": "已完成",
     "tabAll": "全部",
     "searchPlaceholder": "搜索任务...",
-    "noMatchingTasks": "没有匹配的任务"
+    "noMatchingTasks": "没有匹配的任务",
+    "unitYear": "年",
+    "unitMonth": "月",
+    "unitDay": "日",
+    "channelEmpty": "暂无可用通道，请先在「IM 通道」中连接至少一个消息平台",
+    "channelTooltip": "选择一个已连接的 IM 通道，任务执行结果将自动推送到该通道",
+    "channelStale": "该通道当前不在线或已被移除，任务执行时将无法推送通知"
   },
   "im": {
     "channels": "IM 通道",
@@ -901,7 +944,26 @@
     "fetchErrorTimeout": "请求超时，请检查网络或稍后重试",
     "fetchErrorLocalNotRunning": "本地服务未启动，请先启动 {{provider}} 后再拉取",
     "fetchErrorEmpty": "服务商返回了空的模型列表，请检查账号配额或 API 地址",
-    "fetchErrorUnknown": "拉取模型失败：{{detail}}"
+    "fetchErrorUnknown": "拉取模型失败：{{detail}}",
+    "apiKeyPlaceholder": "输入调用大模型的 API Key",
+    "searchProvider": "搜索服务商...",
+    "baseUrlLabel": "API 地址：",
+    "baseUrlToggle": "配置",
+    "baseUrlCollapse": "收起",
+    "modelHint": "自行输入或",
+    "modelHintFetch": "拉取模型列表",
+    "modelHintSelect": "并选择",
+    "modelHintFetched": "（已拉取 {{count}} 个）",
+    "providerReadonly": "服务商在创建时确定，不可更改",
+    "fetchingModels": "拉取模型列表...",
+    "savingEndpoint": "写入端点配置...",
+    "updatingEndpoint": "更新端点配置...",
+    "configConflict": "配置已被其他会话修改，请刷新后重试",
+    "showSecret": "显示",
+    "hideSecret": "隐藏",
+    "pricingConfig": "定价配置",
+    "pricingConfigHint": "（可选，用于费用估算）",
+    "getApiKey": "获取 API Key"
   },
   "welcome": {
     "title": "配置向导",
@@ -938,7 +1000,9 @@
     "copy": "复制",
     "copied": "已复制",
     "close": "关闭",
-    "confirmTitle": "确认操作"
+    "confirmTitle": "确认操作",
+    "enabled": "{{label}} 已启用",
+    "disabled": "{{label}} 已禁用"
   },
   "agentStore": {
     "subtitle": "从 OpenAkita 社区发现并安装 Agent（需要网络连接，本地导入导出不受影响）",

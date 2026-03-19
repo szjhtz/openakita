@@ -536,8 +536,8 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
 
   const statusDotTip = (status: string): string => {
     const map: Record<string, string> = {
-      pending: "等待中", scheduled: "已调度", running: "执行中",
-      completed: "已完成", failed: "失败", disabled: "已禁用", cancelled: "已取消",
+      pending: t("scheduler.statusPending"), scheduled: t("scheduler.statusScheduled"), running: t("scheduler.statusRunning"),
+      completed: t("scheduler.statusCompleted"), failed: t("scheduler.statusFailed"), disabled: t("scheduler.statusDisabled"), cancelled: t("scheduler.statusCancelled"),
     };
     return map[status] || status;
   };
@@ -586,8 +586,8 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
         <IconClock size={48} />
-        <div className="mt-3 font-semibold">计划任务</div>
-        <div className="mt-1 text-xs opacity-50">后端服务未启动，请启动后再进行使用</div>
+        <div className="mt-3 font-semibold">{t("scheduler.title")}</div>
+        <div className="mt-1 text-xs opacity-50">{t("scheduler.serviceNotRunning")}</div>
       </div>
     );
   }
@@ -632,20 +632,20 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
             <Label>{t("scheduler.runAt")}</Label>
             <div className="flex items-center gap-1.5">
               <Select value={curY ? String(curY) : ""} onValueChange={v => updateRunAt(parseInt(v), curMo || defMo, curD || defD, curH, curM)}>
-                <SelectTrigger className="w-[82px]"><SelectValue placeholder="年" /></SelectTrigger>
+                <SelectTrigger className="w-[82px]"><SelectValue placeholder={t("scheduler.unitYear")} /></SelectTrigger>
                 <SelectContent>{yearOptions.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}</SelectContent>
               </Select>
-              <span className="text-xs text-muted-foreground">年</span>
+              <span className="text-xs text-muted-foreground">{t("scheduler.unitYear")}</span>
               <Select value={curMo ? String(curMo) : ""} onValueChange={v => updateRunAt(curY || defY, parseInt(v), curD || defD, curH, curM)}>
-                <SelectTrigger className="w-[68px]"><SelectValue placeholder="月" /></SelectTrigger>
+                <SelectTrigger className="w-[68px]"><SelectValue placeholder={t("scheduler.unitMonth")} /></SelectTrigger>
                 <SelectContent>{monthOptions.map(m => <SelectItem key={m} value={String(m)}>{pad2(m)}</SelectItem>)}</SelectContent>
               </Select>
-              <span className="text-xs text-muted-foreground">月</span>
+              <span className="text-xs text-muted-foreground">{t("scheduler.unitMonth")}</span>
               <Select value={curD ? String(curD) : ""} onValueChange={v => updateRunAt(curY || defY, curMo || defMo, parseInt(v), curH, curM)}>
-                <SelectTrigger className="w-[68px]"><SelectValue placeholder="日" /></SelectTrigger>
+                <SelectTrigger className="w-[68px]"><SelectValue placeholder={t("scheduler.unitDay")} /></SelectTrigger>
                 <SelectContent>{dayOptions.map(d => <SelectItem key={d} value={String(d)}>{pad2(d)}</SelectItem>)}</SelectContent>
               </Select>
-              <span className="text-xs text-muted-foreground mr-1">日</span>
+              <span className="text-xs text-muted-foreground mr-1">{t("scheduler.unitDay")}</span>
               <Select value={String(curH)} onValueChange={v => updateRunAt(curY || defY, curMo || defMo, curD || defD, parseInt(v), curM)}>
                 <SelectTrigger className="w-[68px]"><SelectValue /></SelectTrigger>
                 <SelectContent>{hourOptions.map(h => <SelectItem key={h} value={String(h)}>{pad2(h)}</SelectItem>)}</SelectContent>
@@ -879,7 +879,7 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                     <Info size={14} className="text-muted-foreground cursor-help shrink-0" />
                   </TooltipTrigger>
                   <TooltipContent side="top" className="max-w-[260px]">
-                    {t("scheduler.channelTooltip", "选择一个已连接的 IM 通道，任务执行结果将自动推送到该通道")}
+                    {t("scheduler.channelTooltip")}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -907,7 +907,7 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                     </SelectTrigger>
                     <SelectContent position="popper" className="max-h-[300px]">
                       <SelectItem value="__none__">
-                        {t("scheduler.channelNone", "不推送通知")}
+                        {t("scheduler.channelNone")}
                       </SelectItem>
                       {(() => {
                         const grouped = groupChannelsByPlatform(channels);
@@ -948,12 +948,12 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                   {isStale && (
                     <p className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 mt-1">
                       <AlertTriangle size={12} className="shrink-0" />
-                      {t("scheduler.channelStale", "该通道当前不在线或已被移除，任务执行时将无法推送通知")}
+                      {t("scheduler.channelStale")}
                     </p>
                   )}
                   {channels.length === 0 && !currentKey && (
                     <p className="text-xs text-muted-foreground mt-1">
-                      {t("scheduler.channelEmpty", "暂无可用通道，请先在「IM 通道」中连接至少一个消息平台")}
+                      {t("scheduler.channelEmpty")}
                     </p>
                   )}
                 </>
@@ -1086,7 +1086,7 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                   <span style={{ color: "var(--text)" }}>
                     {task.channel_id
                       ? formatChannelLabel(task.channel_id, task.chat_id || "")
-                      : t("scheduler.channelNone", "不推送通知")}
+                      : t("scheduler.channelNone")}
                   </span>
                 </div>
                 <div>
@@ -1122,10 +1122,10 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
         display: "flex", alignItems: "center", justifyContent: "center",
         gap: 20, padding: "16px 0 4px", fontSize: 12, color: "var(--muted)",
       }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotGreen size={7} /> 已调度</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotBlueProcessing size={7} /> 执行中</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotRed size={7} /> 失败</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotGray size={7} /> 已完成 / 已禁用</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotGreen size={7} /> {t("scheduler.statusScheduled")}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotBlueProcessing size={7} /> {t("scheduler.statusRunning")}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotRed size={7} /> {t("scheduler.statusFailed")}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><DotGray size={7} /> {t("scheduler.statusCompleted")} / {t("scheduler.statusDisabled")}</span>
       </div>
     </div>
   );
