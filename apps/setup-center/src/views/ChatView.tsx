@@ -270,7 +270,7 @@ type StreamEvent =
   | { type: "text_delta"; content: string }
   | { type: "text"; content?: string; text?: string }
   | { type: "tool_call_start"; tool: string; args: Record<string, unknown>; id?: string }
-  | { type: "tool_call_end"; tool: string; result: string; id?: string; is_error?: boolean }
+  | { type: "tool_call_end"; tool: string; result: string; id?: string; is_error?: boolean; skipped?: boolean }
   | { type: "plan_created"; plan: ChatPlan }
   | { type: "plan_step_updated"; stepId?: string; stepIdx?: number; status: string }
   | { type: "plan_completed" }

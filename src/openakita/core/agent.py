@@ -5904,16 +5904,38 @@ NEXT: 建议的下一步（如有）"""
         Returns:
             是否成功设置 skip（False 表示无活跃任务）
         """
-        _sid = session_id or getattr(self, "_current_session_id", None)
-        if hasattr(self, "agent_state") and self.agent_state:
-            task = (
-                self.agent_state.get_task_for_session(_sid) if _sid else None
-            ) or self.agent_state.current_task
+        has_state = hasattr(self, "agent_state") and self.agent_state
+        if not has_state:
+            logger.warning(f"[SkipStep] No agent_state to skip: {reason}")
+            return False
+
+        _effective_sid = session_id or getattr(self, "_current_session_id", None)
+        task = (
+            self.agent_state.get_task_for_session(_effective_sid) if _effective_sid else None
+        )
+        if not task and _effective_sid:
+            for _alt_key in (self._current_conversation_id, self._current_session_id):
+                if _alt_key and _alt_key != _effective_sid:
+                    task = self.agent_state.get_task_for_session(_alt_key)
+                    if task:
+                        _effective_sid = _alt_key
+                        break
+        if not task:
+            task = self.agent_state.current_task
             if task:
-                self.agent_state.skip_current_step(reason, session_id=_sid)
-                logger.info(f"[SkipStep] Step skip requested: {reason} (session={_sid})")
-                return True
-        logger.warning(f"[SkipStep] No active task to skip: {reason}")
+                _effective_sid = task.session_id or task.task_id
+
+        if task:
+            self.agent_state.skip_current_step(reason, session_id=_effective_sid)
+            logger.info(
+                f"[SkipStep] Step skip requested: {reason} "
+                f"(session_id={session_id}, effective_sid={_effective_sid!r})"
+            )
+            return True
+        logger.warning(
+            f"[SkipStep] No active task to skip: {reason} "
+            f"(session_id={session_id})"
+        )
         return False
 
     async def insert_user_message(self, text: str, session_id: str | None = None) -> bool:
@@ -5927,15 +5949,31 @@ NEXT: 建议的下一步（如有）"""
         Returns:
             是否成功入队（False 表示无活跃任务，消息被丢弃）
         """
-        _sid = session_id or getattr(self, "_current_session_id", None)
-        if hasattr(self, "agent_state") and self.agent_state:
-            task = (
-                self.agent_state.get_task_for_session(_sid) if _sid else None
-            ) or self.agent_state.current_task
+        has_state = hasattr(self, "agent_state") and self.agent_state
+        if not has_state:
+            logger.warning(f"[UserInsert] No agent_state, message dropped: {text[:50]}...")
+            return False
+
+        _effective_sid = session_id or getattr(self, "_current_session_id", None)
+        task = (
+            self.agent_state.get_task_for_session(_effective_sid) if _effective_sid else None
+        )
+        if not task and _effective_sid:
+            for _alt_key in (self._current_conversation_id, self._current_session_id):
+                if _alt_key and _alt_key != _effective_sid:
+                    task = self.agent_state.get_task_for_session(_alt_key)
+                    if task:
+                        _effective_sid = _alt_key
+                        break
+        if not task:
+            task = self.agent_state.current_task
             if task:
-                await self.agent_state.insert_user_message(text, session_id=_sid)
-                logger.info(f"[UserInsert] User message queued: {text[:50]}... (session={_sid})")
-                return True
+                _effective_sid = task.session_id or task.task_id
+
+        if task:
+            await self.agent_state.insert_user_message(text, session_id=_effective_sid)
+            logger.info(f"[UserInsert] User message queued: {text[:50]}... (effective_sid={_effective_sid!r})")
+            return True
         logger.warning(f"[UserInsert] No active task, message dropped: {text[:50]}...")
         return False
 
