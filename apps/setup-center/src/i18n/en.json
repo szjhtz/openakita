@@ -69,7 +69,13 @@
     "noData": "No data",
     "sessions": "By Session",
     "disclaimer": "⚠ Local token counts may differ from provider billing. Actual usage is subject to the provider's data. Stats here are for reference only.",
-    "estimatedCost": "Estimated Cost"
+    "estimatedCost": "Estimated Cost",
+    "period1d": "1D",
+    "period3d": "3D",
+    "period1w": "1W",
+    "period1m": "1M",
+    "period6m": "6M",
+    "period1y": "1Y"
   },
   "chat": {
     "placeholder": "Type a message... (Enter to send, Shift+Enter for newline)",
@@ -154,7 +160,17 @@
     "busyOnOtherDevice": "This conversation is active on another device",
     "busyNewConversation": "New Conversation",
     "busyHint": "You can start a new conversation to continue",
-    "conversationBusy": "Conversation Busy"
+    "conversationBusy": "Conversation Busy",
+    "thinkingOn": "Thinking: Deep thinking enabled",
+    "thinkingOff": "Thinking: Deep thinking disabled",
+    "thinkingAuto": "Thinking: Auto",
+    "depthLow": "Low",
+    "depthMedium": "Medium",
+    "depthHigh": "High",
+    "depthTipLow": "Thinking depth: Low — Quick response",
+    "depthTipMedium": "Thinking depth: Medium — Balanced",
+    "depthTipHigh": "Thinking depth: High — Deep reasoning",
+    "depthClickToSwitch": "Click to switch"
   },
   "skills": {
     "title": "Skill Manager",
@@ -482,6 +498,8 @@
     "toolsSkillsEnabled": "Enabled",
     "toolsSkillsDisabled": "Disabled",
     "toolsEnableAll": "Enable All",
+    "toolsDisableAll": "Disable All",
+    "toolsSkillsCount": "{{enabled}} / {{total}} enabled",
     "toolsSystemOnly": "System Only",
     "toolsRefresh": "Refresh",
     "toolsSaveSkills": "Save",
@@ -529,6 +547,9 @@
     "agentName": "Agent Name",
     "agentMaxIter": "Max Iterations",
     "agentThinking": "Thinking Mode",
+    "agentThinkingAuto": "auto (auto-detect)",
+    "agentThinkingAlways": "always (always think)",
+    "agentThinkingNever": "never (never think)",
     "agentFastModel": "Fast Model",
     "agentAutoConfirm": "Auto Confirm (caution)",
     "agentProactive": "Autonomous Drive",
@@ -645,7 +666,23 @@
     "multiAgentMode": "Multi-Agent Mode",
     "multiAgentBeta": "Beta",
     "multiAgentOn": "Multi-Agent enabled",
-    "multiAgentOff": "Single-Agent mode"
+    "multiAgentOff": "Single-Agent mode",
+    "cliTitle": "CLI Tools",
+    "cliDesc": "Manage terminal command registration. After registration, you can use oa or openakita commands directly in CMD / PowerShell / Terminal.",
+    "cliRegistered": "Registered Commands",
+    "cliInPath": "In PATH",
+    "cliNotInPath": "Not in PATH",
+    "cliDirLabel": "Directory:",
+    "cliCmdFull": "Full command",
+    "cliCmdShort": "Short alias",
+    "cliAddToPath": "Add to system PATH",
+    "cliUpdate": "Update Registration",
+    "cliRegister": "Register",
+    "cliUnregisterAll": "Unregister All",
+    "cliSelectOne": "Please select at least one command",
+    "cliStatusError": "Failed to query CLI status:",
+    "cliRegisterFailed": "Registration failed:",
+    "cliUnregisterFailed": "Unregister failed:"
   },
   "scheduler": {
     "title": "Scheduled Tasks",
@@ -721,7 +758,13 @@
     "tabCompleted": "Completed",
     "tabAll": "All",
     "searchPlaceholder": "Search tasks...",
-    "noMatchingTasks": "No matching tasks"
+    "noMatchingTasks": "No matching tasks",
+    "unitYear": "Y",
+    "unitMonth": "M",
+    "unitDay": "D",
+    "channelEmpty": "No channels available. Please connect at least one messaging platform in \"IM Channels\" first.",
+    "channelTooltip": "Select a connected IM channel. Task results will be automatically pushed to this channel.",
+    "channelStale": "This channel is currently offline or has been removed. Notifications cannot be delivered when the task runs."
   },
   "im": {
     "channels": "IM Channels",
@@ -852,7 +895,26 @@
     "fetchErrorTimeout": "Request timed out, please check network or try again later",
     "fetchErrorLocalNotRunning": "Local service is not running, please start {{provider}} first",
     "fetchErrorEmpty": "Provider returned an empty model list, please check account quota or API URL",
-    "fetchErrorUnknown": "Failed to fetch models: {{detail}}"
+    "fetchErrorUnknown": "Failed to fetch models: {{detail}}",
+    "apiKeyPlaceholder": "Enter LLM API Key",
+    "searchProvider": "Search providers...",
+    "baseUrlLabel": "API URL:",
+    "baseUrlToggle": "Configure",
+    "baseUrlCollapse": "Collapse",
+    "modelHint": "Enter manually or",
+    "modelHintFetch": "fetch model list",
+    "modelHintSelect": "to select",
+    "modelHintFetched": "({{count}} fetched)",
+    "providerReadonly": "Provider is set at creation and cannot be changed",
+    "fetchingModels": "Fetching models...",
+    "savingEndpoint": "Saving endpoint config...",
+    "updatingEndpoint": "Updating endpoint config...",
+    "configConflict": "Config was modified by another session, please refresh and retry",
+    "showSecret": "Show",
+    "hideSecret": "Hide",
+    "pricingConfig": "Pricing Config",
+    "pricingConfigHint": "(optional, for cost estimation)",
+    "getApiKey": "Get API Key"
   },
   "welcome": {
     "title": "Setup Guide",
@@ -889,7 +951,9 @@
     "copy": "Copy",
     "copied": "Copied",
     "close": "Close",
-    "confirmTitle": "Confirm"
+    "confirmTitle": "Confirm",
+    "enabled": "{{label}} enabled",
+    "disabled": "{{label}} disabled"
   },
   "agentStore": {
     "subtitle": "Discover and install Agents from the OpenAkita community (requires network; local import/export unaffected)",

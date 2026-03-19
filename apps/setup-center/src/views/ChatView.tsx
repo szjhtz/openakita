@@ -4465,7 +4465,7 @@ export function ChatView({
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" className="text-xs" onPointerDownOutside={(e) => e.preventDefault()}>
-                    {thinkingMode === "on" ? "思考模式: 开启深度思考" : thinkingMode === "off" ? "思考模式: 关闭深度思考" : "思考模式: 自动"}
+                    {thinkingMode === "on" ? t("chat.thinkingOn") : thinkingMode === "off" ? t("chat.thinkingOff") : t("chat.thinkingAuto")}
                   </TooltipContent>
                 </Tooltip>
                 {thinkingMode !== "off" && (
@@ -4485,12 +4485,12 @@ export function ChatView({
                           <rect x="5.5" y="5.5" width="3" height="7.5" rx="0.5" fill="currentColor" opacity={thinkingDepth === "medium" || thinkingDepth === "high" ? 1 : 0.25} />
                           <rect x="10" y="2" width="3" height="11" rx="0.5" fill="currentColor" opacity={thinkingDepth === "high" ? 1 : 0.25} />
                         </svg>
-                        <span style={{ fontSize: 10 }}>{{ low: "低", medium: "中", high: "高" }[thinkingDepth]}</span>
+                        <span style={{ fontSize: 10 }}>{{ low: t("chat.depthLow"), medium: t("chat.depthMedium"), high: t("chat.depthHigh") }[thinkingDepth]}</span>
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="text-xs" onPointerDownOutside={(e) => e.preventDefault()}>
-                      {{ low: "思考程度: 低 — 快速响应", medium: "思考程度: 中 — 平衡模式", high: "思考程度: 高 — 深度推理" }[thinkingDepth]}
-                      <span className="block text-[10px] opacity-60 mt-0.5">点击切换</span>
+                      {{ low: t("chat.depthTipLow"), medium: t("chat.depthTipMedium"), high: t("chat.depthTipHigh") }[thinkingDepth]}
+                      <span className="block text-[10px] opacity-60 mt-0.5">{t("chat.depthClickToSwitch")}</span>
                     </TooltipContent>
                   </Tooltip>
                 )}
