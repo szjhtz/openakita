@@ -218,6 +218,11 @@ export function LLMView(props: LLMViewProps) {
   // ── Effects ──
 
   useEffect(() => {
+    loadSavedEndpoints().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentWorkspaceId, dataMode]);
+
+  useEffect(() => {
     if (!selectedProvider) return;
     if (codingPlanMode && selectedProvider.coding_plan_base_url) {
       setApiType((selectedProvider.coding_plan_api_type as "openai" | "anthropic") || "anthropic");
