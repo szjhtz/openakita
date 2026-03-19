@@ -4230,7 +4230,9 @@ export function App() {
                   const isWarn = /\bWARN(ING)?\b/.test(line);
                   const isDebug = /\bDEBUG\b/.test(line);
                   const cls = isError ? "logLineError" : isWarn ? "logLineWarn" : isDebug ? "logLineDebug" : "logLineInfo";
-                  const highlighted = line
+                  // eslint-disable-next-line no-control-regex
+                  const sanitized = line.replace(/\x1b\[[\d;?]*[A-Za-z]/g, "").replace(/\r/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                  const highlighted = sanitized
                     .replace(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,.]\d+)/, '<span class="logTimestamp">$1</span>')
                     .replace(/\b(INFO|ERROR|WARN(?:ING)?|DEBUG|CRITICAL|FATAL)\b/, '<span class="logLevel logLevel--$1">$1</span>')
                     .replace(/([\w.]+(?:\.[\w]+)+)\s+-\s+/, '<span class="logModule">$1</span> - ')
