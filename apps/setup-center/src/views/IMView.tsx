@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import {
   IconIM, IconMessageCircle, IconRefresh, IconFile, IconImage, IconVolume,
   IconBot, IconPlus, IconEdit, IconTrash,
@@ -10,7 +11,6 @@ import {
   IM_LOGO_MAP,
 } from "../icons";
 import { safeFetch } from "../providers";
-import { ModalOverlay } from "../components/ModalOverlay";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { logger } from "../platform";
 import { IS_WEB, onWsEvent } from "../platform";
@@ -20,6 +20,13 @@ import { WecomQRModal } from "../components/WecomQRModal";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "@/components/ui/sheet";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Bot, BotOff, Loader2, RefreshCw, X } from "lucide-react";
@@ -62,6 +69,7 @@ type ChainSummaryItem = {
 };
 
 type IMMessage = {
+  id?: number;
   role: string;
   content: string;
   timestamp: string;
@@ -174,10 +182,31 @@ export function IMView({
     );
   }
 
+  const [activeTab, setActiveTab] = useState<"messages" | "groupPolicy">("messages");
+
   return (
     <div className="flex flex-col h-full">
+      <div className="flex items-center gap-1 px-3 pt-2 pb-1 border-b shrink-0">
+        <Button
+          variant={activeTab === "messages" ? "default" : "ghost"}
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => setActiveTab("messages")}
+        >
+          {t("im.tabMessages")}
+        </Button>
+        <Button
+          variant={activeTab === "groupPolicy" ? "default" : "ghost"}
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => setActiveTab("groupPolicy")}
+        >
+          {t("im.tabGroupPolicy")}
+        </Button>
+      </div>
       <div className="flex-1 min-h-0 overflow-auto">
-        <MessagesTab serviceRunning={serviceRunning} apiBase={api} />
+        {activeTab === "messages" && <MessagesTab serviceRunning={serviceRunning} apiBase={api} />}
+        {activeTab === "groupPolicy" && <GroupPolicyTab apiBase={api} />}
       </div>
     </div>
   );
@@ -195,6 +224,9 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
   const [totalMessages, setTotalMessages] = useState(0);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const getChannelDisplayName = useCallback((ch: IMChannel): string => {
     const key = `status.${(ch.channel || "").toLowerCase()}`;
@@ -242,7 +274,8 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
       setMessages([]);
     }
     if (selectedChannel) fetchSessions(selectedChannel);
-  }, [apiBase, selectedChannel, selectedSessionId, fetchSessions]);
+    fetchChannels();
+  }, [apiBase, selectedChannel, selectedSessionId, fetchSessions, fetchChannels]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -304,8 +337,49 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
 
   const handleSelectSession = useCallback((sid: string) => {
     setSelectedSessionId(sid);
+    setSelectMode(false);
+    setSelectedMsgIds(new Set());
     fetchMessages(sid);
   }, [fetchMessages]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (!selectedSessionId || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const nextOffset = messages.length;
+      const res = await safeFetch(
+        `${apiBase}/api/im/sessions/${encodeURIComponent(selectedSessionId)}/messages?limit=50&offset=${nextOffset}`,
+      );
+      const data = await res.json();
+      const more: IMMessage[] = data.messages || [];
+      if (more.length) setMessages((prev) => [...prev, ...more]);
+      setTotalMessages(data.total || totalMessages);
+    } catch { /* ignore */ }
+    setLoadingMore(false);
+  }, [apiBase, selectedSessionId, messages.length, totalMessages, loadingMore]);
+
+  const handleDeleteMessages = useCallback(async () => {
+    if (!selectedSessionId || selectedMsgIds.size === 0) return;
+    try {
+      await safeFetch(`${apiBase}/api/im/sessions/${encodeURIComponent(selectedSessionId)}/messages/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turn_ids: Array.from(selectedMsgIds) }),
+      });
+      setMessages((prev) => prev.filter((m) => !m.id || !selectedMsgIds.has(m.id)));
+      setTotalMessages((prev) => Math.max(0, prev - selectedMsgIds.size));
+      setSelectedMsgIds(new Set());
+      setSelectMode(false);
+    } catch { /* ignore */ }
+  }, [apiBase, selectedSessionId, selectedMsgIds]);
+
+  const toggleMsgSelect = useCallback((id: number) => {
+    setSelectedMsgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
 
   const handleDeleteSession = useCallback((s: IMSession, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -313,7 +387,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
       ? (s.chatName || s.chatId || s.sessionId.slice(0, 12))
       : (s.displayName || s.userId || s.chatId || s.sessionId.slice(0, 12));
     setConfirmDialog({
-      message: `确定要删除会话「${name}」吗？\n会话消息历史将被保留，但会话将从列表中移除。`,
+      message: `确定要删除会话「${name}」吗？\n会话及其所有消息记录将被永久删除，不可恢复。`,
       onConfirm: () => deleteSession(s.sessionId),
     });
   }, [deleteSession]);
@@ -475,40 +549,84 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
             </div>
           ) : (
             <div className="flex flex-col h-full">
-              {/* Messages header */}
-              <div className="px-4 py-2.5 border-b text-xs font-bold text-muted-foreground">
-                {t("im.messages")} ({totalMessages})
+              {/* Messages header + toolbar */}
+              <div className="flex items-center justify-between px-4 py-2 border-b">
+                <span className="text-xs font-bold text-muted-foreground">
+                  {t("im.messages")} ({totalMessages})
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {selectMode && selectedMsgIds.size > 0 && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-6 text-[11px] px-2"
+                      onClick={() => setConfirmDialog({
+                        message: `确定要删除选中的 ${selectedMsgIds.size} 条消息吗？\n消息将被永久删除，不可恢复。`,
+                        onConfirm: handleDeleteMessages,
+                      })}
+                    >
+                      {t("common.delete")} ({selectedMsgIds.size})
+                    </Button>
+                  )}
+                  <Button
+                    variant={selectMode ? "default" : "outline"}
+                    size="sm"
+                    className="h-6 text-[11px] px-2"
+                    onClick={() => { setSelectMode(!selectMode); setSelectedMsgIds(new Set()); }}
+                  >
+                    {selectMode ? t("common.cancel") : t("common.delete")}
+                  </Button>
+                </div>
               </div>
               {/* Messages list */}
               <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
                 {messages.map((msg, idx) => (
-                  <div key={idx}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge
-                        variant={msg.role === "user" ? "default" : msg.role === "system" ? "outline" : "secondary"}
-                        className="text-[10px] px-1.5 py-0 h-[18px]"
-                      >
-                        {msg.role === "user" ? t("im.user") : msg.role === "system" ? t("im.system") : t("im.bot")}
-                      </Badge>
-                      <span className="text-[10px] text-muted-foreground">
-                        {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ""}
-                      </span>
-                    </div>
-                    {msg.role !== "user" && msg.chain_summary && msg.chain_summary.length > 0 && (
-                      <IMChainSummary chain={msg.chain_summary} />
+                  <div key={msg.id ?? idx} className="flex gap-2">
+                    {selectMode && msg.id != null && (
+                      <input
+                        type="checkbox"
+                        className="mt-1.5 shrink-0 accent-primary size-3.5"
+                        checked={selectedMsgIds.has(msg.id)}
+                        onChange={() => toggleMsgSelect(msg.id!)}
+                      />
                     )}
-                    <div className={cn(
-                      "text-[13px] leading-relaxed p-2.5 rounded-lg border",
-                      msg.role === "user"
-                        ? "bg-primary/[0.04] border-primary/[0.12]"
-                        : "bg-muted/50 border-border"
-                    )}>
-                      <MediaContent content={msg.content} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge
+                          variant={msg.role === "user" ? "default" : msg.role === "system" ? "outline" : "secondary"}
+                          className="text-[10px] px-1.5 py-0 h-[18px]"
+                        >
+                          {msg.role === "user" ? t("im.user") : msg.role === "system" ? t("im.system") : t("im.bot")}
+                        </Badge>
+                        <span className="text-[10px] text-muted-foreground">
+                          {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ""}
+                        </span>
+                      </div>
+                      {msg.role !== "user" && msg.chain_summary && msg.chain_summary.length > 0 && (
+                        <IMChainSummary chain={msg.chain_summary} />
+                      )}
+                      <div className={cn(
+                        "text-[13px] leading-relaxed p-2.5 rounded-lg border",
+                        msg.role === "user"
+                          ? "bg-primary/[0.04] border-primary/[0.12]"
+                          : "bg-muted/50 border-border",
+                        selectMode && msg.id != null && selectedMsgIds.has(msg.id) && "ring-2 ring-primary/30",
+                      )}>
+                        <MediaContent content={msg.content} />
+                      </div>
                     </div>
                   </div>
                 ))}
                 {messages.length === 0 && (
                   <div className="px-4 py-4 text-center text-xs text-muted-foreground">{t("im.noMessages")}</div>
+                )}
+                {messages.length < totalMessages && (
+                  <div className="flex justify-center py-2">
+                    <Button variant="ghost" size="sm" className="text-xs" onClick={handleLoadMore} disabled={loadingMore}>
+                      {loadingMore ? <Loader2 className="animate-spin size-3 mr-1" /> : null}
+                      {loadingMore ? t("common.loading") : `${t("im.messages")} (${messages.length}/${totalMessages})`}
+                    </Button>
+                  </div>
                 )}
               </div>
             </div>
@@ -518,6 +636,173 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
 
       <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </>
+  );
+}
+
+// ─── Group Policy Tab ───────────────────────────────────────────────────
+
+type GroupInfo = { chatId: string; chatName: string; allowed: boolean };
+
+const GROUP_MODES = ["always", "mention_only", "smart", "allowlist", "disabled"] as const;
+
+function GroupPolicyTab({ apiBase }: { apiBase: string }) {
+  const { t } = useTranslation();
+  const [channels, setChannels] = useState<{ channel: string; name: string }[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [mode, setMode] = useState("mention_only");
+  const [allowlist, setAllowlist] = useState<string[]>([]);
+  const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const fetchChannels = useCallback(async () => {
+    try {
+      const res = await safeFetch(`${apiBase}/api/im/channels`);
+      const data = await res.json();
+      setChannels((data.channels || []).map((c: any) => ({ channel: c.channel, name: c.name || c.channel })));
+    } catch { /* ignore */ }
+  }, [apiBase]);
+
+  useEffect(() => { fetchChannels(); }, [fetchChannels]);
+
+  const fetchPolicy = useCallback(async (ch: string) => {
+    try {
+      const res = await safeFetch(`${apiBase}/api/im/group-policy?channel=${encodeURIComponent(ch)}`);
+      const data = await res.json();
+      setMode(data.mode || "mention_only");
+      setAllowlist(data.allowlist || []);
+      setGroups(data.groups || []);
+    } catch { /* ignore */ }
+  }, [apiBase]);
+
+  const handleSelectChannel = useCallback((ch: string) => {
+    setSelectedChannel(ch);
+    fetchPolicy(ch);
+  }, [fetchPolicy]);
+
+  const handleSave = useCallback(async () => {
+    if (!selectedChannel) return;
+    setSaving(true);
+    try {
+      await safeFetch(`${apiBase}/api/im/group-policy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: selectedChannel, mode, allowlist }),
+      });
+    } catch { /* ignore */ }
+    setSaving(false);
+  }, [apiBase, selectedChannel, mode, allowlist]);
+
+  const toggleGroup = useCallback((chatId: string) => {
+    setAllowlist((prev) =>
+      prev.includes(chatId) ? prev.filter((id) => id !== chatId) : [...prev, chatId],
+    );
+    setGroups((prev) =>
+      prev.map((g) => g.chatId === chatId ? { ...g, allowed: !g.allowed } : g),
+    );
+  }, []);
+
+  return (
+    <div className="flex h-full">
+      {/* Left: channel list */}
+      <div className="w-56 shrink-0 border-r overflow-y-auto">
+        <div className="px-3 pt-2.5 pb-1.5">
+          <span className="text-sm font-semibold text-foreground">{t("im.groupPolicyTitle")}</span>
+        </div>
+        <div className="px-1.5 space-y-0.5">
+          {channels.map((ch) => (
+            <div
+              key={ch.channel}
+              className={cn(
+                "rounded-lg px-2.5 py-2 text-[13px] cursor-pointer select-none transition-colors",
+                selectedChannel === ch.channel ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+              )}
+              onClick={() => handleSelectChannel(ch.channel)}
+              role="button" tabIndex={0}
+            >
+              {ch.name}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: policy config */}
+      <div className="flex-1 min-w-0 overflow-y-auto p-4">
+        {!selectedChannel ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm">
+            <IconUsers size={40} />
+            <p className="mt-2">{t("im.noChannel")}</p>
+          </div>
+        ) : (
+          <div className="space-y-6 max-w-xl">
+            {/* Mode selector */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">{t("im.groupPolicyDesc")}</h3>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                value={mode}
+                onValueChange={(v) => { if (v) setMode(v); }}
+                className="flex flex-wrap gap-1 [&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground"
+              >
+                {GROUP_MODES.map((m) => (
+                  <ToggleGroupItem key={m} value={m} className="text-xs">
+                    {t(`im.groupMode_${m}`)}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              {(mode === "always" || mode === "smart") && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">
+                  {t(`im.groupModeHint_${mode}`)}
+                </p>
+              )}
+            </div>
+
+            {/* Allowlist editor */}
+            {mode === "allowlist" && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">{t("im.groupAllowlistTitle")}</h3>
+                <p className="text-xs text-muted-foreground">{t("im.groupAllowlistDesc")}</p>
+                {groups.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic py-4 text-center">{t("im.groupAllowlistEmpty")}</p>
+                ) : (
+                  <div className="space-y-1">
+                    {groups.map((g) => (
+                      <div
+                        key={g.chatId}
+                        className="flex items-center justify-between rounded-lg border px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <IconUsers size={14} className="shrink-0 text-muted-foreground" />
+                          <span className="text-sm truncate">{g.chatName || g.chatId}</span>
+                          {g.chatName && (
+                            <span className="text-[11px] text-muted-foreground truncate">({g.chatId})</span>
+                          )}
+                        </div>
+                        <Button
+                          variant={g.allowed ? "default" : "outline"}
+                          size="sm"
+                          className="h-6 text-xs shrink-0"
+                          onClick={() => toggleGroup(g.chatId)}
+                        >
+                          {g.allowed ? t("im.groupAllowed") : t("im.groupDenied")}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Save button */}
+            <Button onClick={handleSave} disabled={saving} className="w-full">
+              {saving ? <Loader2 className="animate-spin size-4 mr-2" /> : null}
+              {saving ? t("topbar.saving") : t("common.save")}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -533,7 +818,6 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
   const [isCreating, setIsCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: "ok" | "err" } | null>(null);
   const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
   const [showFeishuQR, setShowFeishuQR] = useState(false);
   const [showQQBotQR, setShowQQBotQR] = useState(false);
@@ -553,11 +837,6 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       setTgPairingLoading(false);
     }
   }, [apiBase]);
-
-  const showToast = useCallback((text: string, type: "ok" | "err" = "ok") => {
-    setToastMsg({ text, type });
-    setTimeout(() => setToastMsg(null), 3500);
-  }, []);
 
   const fetchBots = useCallback(async () => {
     setLoading(true);
@@ -633,9 +912,9 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       });
       closeEditor();
       fetchBots();
-      showToast(t("im.botSaveSuccess"), "ok");
+      toast.success(t("im.botSaveSuccess"));
     } catch (e) {
-      showToast(String(e) || t("im.botSaveFailed"), "err");
+      toast.error(String(e) || t("im.botSaveFailed"));
     }
     setSaving(false);
   };
@@ -672,10 +951,10 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       });
       closeEditor();
       fetchBots();
-      showToast(t("im.botSaveSuccess"), "ok");
+      toast.success(t("im.botSaveSuccess"));
       onRequestRestart?.();
     } catch (e) {
-      showToast(String(e) || t("im.botSaveFailed"), "err");
+      toast.error(String(e) || t("im.botSaveFailed"));
     }
     setSaving(false);
   };
@@ -685,9 +964,9 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       await safeFetch(`${apiBase}/api/agents/bots/${botId}`, { method: "DELETE" });
       setConfirmDeleteId(null);
       fetchBots();
-      showToast(t("im.botDeleteSuccess"), "ok");
+      toast.success(t("im.botDeleteSuccess"));
     } catch (e) {
-      showToast(String(e) || t("im.botDeleteFailed"), "err");
+      toast.error(String(e) || t("im.botDeleteFailed"));
     }
   };
 
@@ -699,7 +978,7 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
         body: JSON.stringify({ enabled: !bot.enabled }),
       });
       fetchBots();
-      showToast(t("im.botToggleSuccess"), "ok");
+      toast.success(t("im.botToggleSuccess"));
     } catch { /* ignore */ }
   };
 
@@ -712,148 +991,83 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
 
   const credFields = CREDENTIAL_FIELDS[editingBot.type] || [];
 
+  const streamingEnabled = editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true;
+  const groupStreamingEnabled = editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true;
+
   if (!multiAgentEnabled) {
     return (
-      <div style={{ padding: 40, textAlign: "center", opacity: 0.5 }}>
+      <div className="flex flex-col items-center justify-center py-10 text-muted-foreground opacity-50">
         <IconBot size={48} />
-        <div style={{ marginTop: 12, fontWeight: 700 }}>{t("im.needMultiAgent")}</div>
+        <div className="mt-3 font-bold">{t("im.needMultiAgent")}</div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 20, position: "relative" }}>
-      {/* Toast */}
-      {toastMsg && (
-        <div style={{
-          position: "fixed", top: 20, right: 20, zIndex: 9999,
-          padding: "10px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-          background: toastMsg.type === "ok" ? "var(--ok, #10b981)" : "#ef4444",
-          color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-          animation: "fadeIn 0.2s",
-        }}>
-          {toastMsg.text}
-        </div>
-      )}
-
+    <div className="p-5 relative">
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+      <div className="flex items-center gap-3 mb-5">
         <IconBot size={24} />
-        <div>
-          <h2 style={{ margin: 0, fontSize: 18 }}>{t("im.botsTitle")}</h2>
-          <div style={{ fontSize: 12, opacity: 0.5, marginTop: 2 }}>{t("im.botsDesc")}</div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-lg font-semibold leading-tight">{t("im.botsTitle")}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">{t("im.botsDesc")}</p>
         </div>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={fetchBots}
-          disabled={loading}
-          style={{
-            display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 12px", borderRadius: 8, border: "1px solid var(--line)",
-            background: "var(--panel)", cursor: "pointer", fontSize: 13,
-          }}
-        >
-          <IconRefresh size={14} />
-        </button>
-        <button
-          onClick={openCreate}
-          style={{
-            display: "flex", alignItems: "center", gap: 6,
-            padding: "6px 14px", borderRadius: 8, border: "none",
-            background: "var(--primary, #3b82f6)", color: "#fff",
-            cursor: "pointer", fontSize: 13, fontWeight: 600,
-          }}
-        >
+        <Button variant="outline" size="icon-sm" onClick={fetchBots} disabled={loading}>
+          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+        </Button>
+        <Button size="sm" onClick={openCreate}>
           <IconPlus size={14} />
           {t("im.createBot")}
-        </button>
+        </Button>
       </div>
 
       {/* Bot Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5">
         {bots.map((bot) => {
           const agentProfile = profiles.find((p) => p.id === bot.agent_profile_id);
           return (
             <div
               key={bot.id}
-              style={{
-                padding: 16, borderRadius: 12,
-                background: "var(--panel)", border: "1px solid var(--line)",
-                position: "relative", overflow: "hidden",
-                opacity: bot.enabled ? 1 : 0.55,
-                transition: "box-shadow 0.2s",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.08)")}
-              onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+              className={cn(
+                "rounded-xl border bg-card p-4 relative overflow-hidden transition-shadow hover:shadow-md",
+                !bot.enabled && "opacity-55"
+              )}
             >
-              {/* Type badge */}
-              <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4, alignItems: "center" }}>
-                <span style={{
-                  fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4,
-                  background: "rgba(99,102,241,0.12)", color: "#6366f1",
-                  display: "inline-flex", alignItems: "center", gap: 3,
-                }}>
+              <div className="absolute top-2 right-2 flex gap-1">
+                <Badge variant="secondary" className="text-[10px] gap-1 px-1.5 py-0">
                   {IM_LOGO_MAP[bot.type]?.({ size: 12 })}
                   {BOT_TYPE_LABELS[bot.type] || bot.type}
-                </span>
-                <span style={{
-                  fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4,
-                  background: bot.enabled ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
-                  color: bot.enabled ? "#10b981" : "#ef4444",
-                }}>
+                </Badge>
+                <Badge variant={bot.enabled ? "default" : "destructive"} className="text-[10px] px-1.5 py-0">
                   {bot.enabled ? t("im.botEnabled") : t("im.botDisabled")}
-                </span>
+                </Badge>
               </div>
 
-              {/* Content */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, marginTop: 2 }}>
-                <span style={{ fontSize: 24, lineHeight: 1 }}>{agentProfile?.icon || "🤖"}</span>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {bot.name || bot.id}
-                  </div>
-                  <div style={{ fontSize: 11, opacity: 0.45, fontFamily: "monospace" }}>{bot.id}</div>
+              <div className="flex items-center gap-2.5 mt-0.5 mb-1.5">
+                <span className="text-2xl leading-none">{agentProfile?.icon || "🤖"}</span>
+                <div className="min-w-0">
+                  <div className="font-bold text-sm truncate">{bot.name || bot.id}</div>
+                  <div className="text-[11px] text-muted-foreground/45 font-mono">{bot.id}</div>
                 </div>
               </div>
-              <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10 }}>
+              <p className="text-xs text-muted-foreground mb-2.5">
                 {t("im.botAgent")}: {agentProfile?.name || bot.agent_profile_id}
-              </div>
+              </p>
 
-              {/* Actions */}
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
+              <div className="flex gap-2">
+                <Button
+                  variant="outline" size="sm"
+                  className={cn("h-7 text-xs", bot.enabled ? "text-destructive" : "text-emerald-600")}
                   onClick={() => handleToggle(bot)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "4px 10px", borderRadius: 6, border: "1px solid var(--line)",
-                    background: "transparent", cursor: "pointer", fontSize: 12,
-                    color: bot.enabled ? "#ef4444" : "#10b981",
-                  }}
                 >
                   {bot.enabled ? t("scheduler.disable") : t("scheduler.enable")}
-                </button>
-                <button
-                  onClick={() => openEdit(bot)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "4px 10px", borderRadius: 6, border: "1px solid var(--line)",
-                    background: "transparent", cursor: "pointer", fontSize: 12,
-                  }}
-                >
-                  <IconEdit size={12} />
-                  {t("agentManager.edit")}
-                </button>
-                <button
-                  onClick={() => setConfirmDeleteId(bot.id)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "4px 10px", borderRadius: 6, border: "1px solid var(--line)",
-                    background: "transparent", cursor: "pointer", fontSize: 12,
-                    color: "#ef4444",
-                  }}
-                >
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => openEdit(bot)}>
+                  <IconEdit size={12} />{t("agentManager.edit")}
+                </Button>
+                <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => setConfirmDeleteId(bot.id)}>
                   <IconTrash size={12} />
-                </button>
+                </Button>
               </div>
             </div>
           );
@@ -861,495 +1075,275 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       </div>
 
       {bots.length === 0 && !loading && (
-        <div style={{ textAlign: "center", padding: 40, opacity: 0.5 }}>
+        <div className="flex flex-col items-center justify-center py-10 text-muted-foreground opacity-50">
           <IconBot size={40} />
-          <div style={{ marginTop: 12 }}>{t("im.noBots")}</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>{t("im.noBotsHint")}</div>
+          <div className="mt-3">{t("im.noBots")}</div>
+          <div className="text-xs mt-1">{t("im.noBotsHint")}</div>
         </div>
       )}
 
-      {/* Delete confirmation overlay */}
-      {confirmDeleteId && (
-        <ModalOverlay onClose={() => setConfirmDeleteId(null)} className="" style={{
-          position: "fixed", inset: 0, zIndex: 9000,
-          background: "rgba(0,0,0,0.35)", display: "flex",
-          alignItems: "center", justifyContent: "center",
-        }}>
-          <div style={{
-            background: "var(--panel)", borderRadius: 12, padding: 24,
-            minWidth: 320, boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
-          }}>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>{t("im.botConfirmDelete")}</div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setConfirmDeleteId(null)}
-                style={{
-                  padding: "6px 16px", borderRadius: 6, border: "1px solid var(--line)",
-                  background: "transparent", cursor: "pointer", fontSize: 13,
-                }}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                onClick={() => handleDelete(confirmDeleteId)}
-                style={{
-                  padding: "6px 16px", borderRadius: 6, border: "none",
-                  background: "#ef4444", color: "#fff", cursor: "pointer",
-                  fontSize: 13, fontWeight: 600,
-                }}
-              >
-                {t("common.delete")}
-              </button>
-            </div>
-          </div>
-        </ModalOverlay>
-      )}
+      {/* Delete confirmation */}
+      <AlertDialog open={!!confirmDeleteId} onOpenChange={(open) => { if (!open) setConfirmDeleteId(null); }}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("im.botConfirmDelete")}</AlertDialogTitle>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => confirmDeleteId && handleDelete(confirmDeleteId)}>
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-      {/* Slide-in Editor Panel */}
-      {editorOpen && (
-        <ModalOverlay onClose={closeEditor} className="" style={{
-          position: "fixed", inset: 0, zIndex: 7999,
-          background: "rgba(15, 23, 42, 0.45)", backdropFilter: "blur(4px)",
-          display: "flex", justifyContent: "flex-end",
-        }}>
-        <div style={{
-          position: "relative", width: 420, height: "100%",
-          background: "var(--panel)", borderLeft: "1px solid var(--line)",
-          boxShadow: "-4px 0 24px rgba(0,0,0,0.12)",
-          display: "flex", flexDirection: "column",
-          animation: "slideInRight 0.2s ease-out",
-        }}>
-          {/* Editor header */}
-          <div style={{
-            padding: "16px 20px", borderBottom: "1px solid var(--line)",
-            display: "flex", alignItems: "center", gap: 10,
-          }}>
-            <h3 style={{ margin: 0, fontSize: 16, flex: 1 }}>
-              {isCreating ? t("im.createBot") : t("im.editBot")}
-            </h3>
-            <button
-              onClick={closeEditor}
-              style={{
-                border: "none", background: "transparent", cursor: "pointer",
-                fontSize: 18, opacity: 0.5, padding: "4px 8px",
-              }}
-            >
-              ✕
-            </button>
-          </div>
+      {/* Editor Sheet */}
+      <Sheet open={editorOpen} onOpenChange={(open) => { if (!open) closeEditor(); }}>
+        <SheetContent side="right" className="sm:max-w-md flex flex-col">
+          <SheetHeader>
+            <SheetTitle>{isCreating ? t("im.createBot") : t("im.editBot")}</SheetTitle>
+          </SheetHeader>
 
-          {/* Editor body */}
-          <div style={{ flex: 1, overflow: "auto", padding: "16px 20px" }}>
+          <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
             {/* Bot ID */}
-            <label style={{ display: "block", marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("im.botId")}</div>
-              <input
+            <div className="space-y-1.5">
+              <Label>{t("im.botId")}</Label>
+              <Input
                 value={editingBot.id}
                 onChange={(e) => setEditingBot((p) => ({ ...p, id: e.target.value.replace(/[^a-z0-9_-]/gi, "").toLowerCase() }))}
                 disabled={!isCreating}
                 placeholder="my-feishu-bot"
-                style={{
-                  width: "100%", padding: "8px 10px", borderRadius: 6,
-                  border: "1px solid var(--line)", background: isCreating ? "var(--bg)" : "var(--panel)",
-                  fontSize: 13, boxSizing: "border-box",
-                }}
               />
-              {isCreating && (
-                <div style={{ fontSize: 11, opacity: 0.4, marginTop: 2 }}>{t("im.botIdHint")}</div>
-              )}
-            </label>
+              {isCreating && <p className="text-[11px] text-muted-foreground/40">{t("im.botIdHint")}</p>}
+            </div>
 
             {/* Bot Name */}
-            <label style={{ display: "block", marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("im.botName")}</div>
-              <input
+            <div className="space-y-1.5">
+              <Label>{t("im.botName")}</Label>
+              <Input
                 value={editingBot.name}
                 onChange={(e) => setEditingBot((p) => ({ ...p, name: e.target.value }))}
                 placeholder="My Bot"
-                style={{
-                  width: "100%", padding: "8px 10px", borderRadius: 6,
-                  border: "1px solid var(--line)", background: "var(--bg)",
-                  fontSize: 13, boxSizing: "border-box",
-                }}
               />
-            </label>
+            </div>
 
             {/* Bot Type */}
-            <label style={{ display: "block", marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("im.botType")}</div>
-              <select
+            <div className="space-y-1.5">
+              <Label>{t("im.botType")}</Label>
+              <Select
                 value={WEWORK_TYPES.has(editingBot.type) ? "wework_ws" : ONEBOT_TYPES.has(editingBot.type) ? "onebot_reverse" : editingBot.type}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setEditingBot((p) => ({ ...p, type: val, credentials: {} }));
-                }}
+                onValueChange={(val) => setEditingBot((p) => ({ ...p, type: val, credentials: {} }))}
                 disabled={!isCreating}
-                style={{
-                  width: "100%", padding: "8px 10px", borderRadius: 6,
-                  border: "1px solid var(--line)", background: isCreating ? "var(--bg)" : "var(--panel)",
-                  fontSize: 13, lineHeight: 1.4, boxSizing: "border-box",
-                }}
               >
-                {BOT_TYPES.filter((bt) => bt !== "wework" && bt !== "onebot")
-                  .filter((bt) => !enabledChannels || enabledChannels.includes(bt))
-                  .map((bt) => (
-                  <option key={bt} value={bt}>
-                    {bt === "wework_ws" ? "企业微信" : bt === "onebot_reverse" ? "OneBot" : (BOT_TYPE_LABELS[bt] || bt)}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {BOT_TYPES.filter((bt) => bt !== "wework" && bt !== "onebot")
+                    .filter((bt) => !enabledChannels || enabledChannels.includes(bt))
+                    .map((bt) => (
+                    <SelectItem key={bt} value={bt}>
+                      {bt === "wework_ws" ? "企业微信" : bt === "onebot_reverse" ? "OneBot" : (BOT_TYPE_LABELS[bt] || bt)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
             {/* Agent Profile */}
-            <label style={{ display: "block", marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("im.botAgent")}</div>
-              <select
-                value={editingBot.agent_profile_id}
-                onChange={(e) => setEditingBot((p) => ({ ...p, agent_profile_id: e.target.value }))}
-                style={{
-                  width: "100%", padding: "8px 10px", borderRadius: 6,
-                  border: "1px solid var(--line)", background: "var(--bg)",
-                  fontSize: 13, lineHeight: 1.4, boxSizing: "border-box",
-                }}
-              >
-                <option value="default">{t("im.botAgentDefault")}</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.icon} {p.name} ({p.id})
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {/* Enabled toggle */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>{t("im.botEnabled")}</span>
-              <div
-                onClick={() => setEditingBot((p) => ({ ...p, enabled: !p.enabled }))}
-                style={{
-                  width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-                  background: editingBot.enabled ? "var(--ok, #10b981)" : "var(--line)",
-                  position: "relative", transition: "background 0.2s",
-                }}
-              >
-                <div style={{
-                  width: 18, height: 18, borderRadius: 9, background: "#fff",
-                  position: "absolute", top: 2,
-                  left: editingBot.enabled ? 20 : 2,
-                  transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                }} />
-              </div>
+            <div className="space-y-1.5">
+              <Label>{t("im.botAgent")}</Label>
+              <Select value={editingBot.agent_profile_id} onValueChange={(v) => setEditingBot((p) => ({ ...p, agent_profile_id: v }))}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">{t("im.botAgentDefault")}</SelectItem>
+                  {profiles.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.icon} {p.name} ({p.id})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
+            {/* Enabled */}
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <Switch checked={editingBot.enabled} onCheckedChange={(v) => setEditingBot((p) => ({ ...p, enabled: v }))} />
+              <span className="text-sm font-medium">{t("im.botEnabled")}</span>
+            </label>
 
             {/* OneBot mode selector */}
             {ONEBOT_TYPES.has(editingBot.type) && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("config.imOneBotMode")}</div>
+              <div className="space-y-1.5">
+                <Label>{t("config.imOneBotMode")}</Label>
                 <ToggleGroup type="single" variant="outline" size="sm" value={editingBot.type} onValueChange={(v) => {
                   if (v && v !== editingBot.type) setEditingBot((p) => ({ ...p, type: v as typeof editingBot.type, credentials: {} }));
-                }} className="mt-1 [&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground">
+                }} className="[&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground">
                   <ToggleGroupItem value="onebot_reverse">{t("config.imOneBotModeReverse")}</ToggleGroupItem>
                   <ToggleGroupItem value="onebot">{t("config.imOneBotModeForward")}</ToggleGroupItem>
                 </ToggleGroup>
-                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                <p className="text-[11px] text-muted-foreground">
                   {editingBot.type === "onebot_reverse" ? t("config.imOneBotModeReverseHint") : t("config.imOneBotModeForwardHint")}
-                </div>
+                </p>
               </div>
             )}
 
             {/* WeWork mode selector */}
             {WEWORK_TYPES.has(editingBot.type) && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t("config.imWeworkMode")}</div>
+              <div className="space-y-1.5">
+                <Label>{t("config.imWeworkMode")}</Label>
                 <ToggleGroup type="single" variant="outline" size="sm" value={editingBot.type} onValueChange={(v) => {
                   if (v && v !== editingBot.type) setEditingBot((p) => ({ ...p, type: v as typeof editingBot.type, credentials: {} }));
-                }} className="mt-1 [&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground">
+                }} className="[&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground">
                   <ToggleGroupItem value="wework_ws">{t("config.imWeworkModeWs")}</ToggleGroupItem>
                   <ToggleGroupItem value="wework">{t("config.imWeworkModeHttp")}</ToggleGroupItem>
                 </ToggleGroup>
-                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                <p className="text-[11px] text-muted-foreground">
                   {editingBot.type === "wework_ws" ? t("config.imWeworkModeWsHint") : t("config.imWeworkModeHttpHint")}
-                </div>
+                </p>
               </div>
             )}
 
             {/* WeCom WS: QR onboard */}
             {editingBot.type === "wework_ws" && venvDir && (
-              <button
-                type="button"
-                style={{
-                  width: "100%", padding: "10px 0", marginBottom: 12,
-                  borderRadius: 8, border: "1.5px dashed var(--accent, #3b82f6)",
-                  background: "var(--accent-bg, rgba(59,130,246,0.06))",
-                  color: "var(--accent, #3b82f6)", fontWeight: 600, fontSize: 13,
-                  cursor: "pointer", transition: "all 0.15s",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.12))"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.06))"; }}
-                onClick={() => setShowWecomQR(true)}
-              >{t("wecom.qrScanCreate")}</button>
+              <Button variant="outline" className="w-full border-dashed border-primary text-primary" onClick={() => setShowWecomQR(true)}>
+                {t("wecom.qrScanCreate")}
+              </Button>
             )}
 
             {/* Credentials */}
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{t("im.botCredentials")}</div>
-            {credFields.map((field) => (
-              <label key={field.key} style={{ display: "block", marginBottom: 10 }}>
-                <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 2 }}>{t(field.label, { defaultValue: field.label })}</div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <input
-                    type={field.secret && !revealedSecrets.has(field.key) ? "password" : "text"}
-                    value={String(editingBot.credentials[field.key] ?? "")}
-                    onChange={(e) => updateCredential(field.key, e.target.value)}
-                    placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
-                    style={{
-                      flex: 1, padding: "7px 10px", borderRadius: 6,
-                      border: "1px solid var(--line)", background: "var(--bg)",
-                      fontSize: 12, boxSizing: "border-box",
-                    }}
-                  />
-                  {field.secret && (
-                    <button
-                      type="button"
-                      onClick={() => setRevealedSecrets((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(field.key)) next.delete(field.key);
-                        else next.add(field.key);
-                        return next;
-                      })}
-                      style={{
-                        padding: "4px 8px", borderRadius: 6,
-                        border: "1px solid var(--line)", background: "transparent",
-                        cursor: "pointer", fontSize: 11,
-                      }}
-                    >
-                      {revealedSecrets.has(field.key) ? t("skills.hide") : t("skills.show")}
-                    </button>
-                  )}
+            <div className="space-y-2.5">
+              <Label className="text-xs font-semibold">{t("im.botCredentials")}</Label>
+              {credFields.map((field) => (
+                <div key={field.key} className="space-y-1">
+                  <Label className="text-[11px] text-muted-foreground/60">{t(field.label, { defaultValue: field.label })}</Label>
+                  <div className="flex gap-1">
+                    <Input
+                      type={field.secret && !revealedSecrets.has(field.key) ? "password" : "text"}
+                      value={String(editingBot.credentials[field.key] ?? "")}
+                      onChange={(e) => updateCredential(field.key, e.target.value)}
+                      placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
+                      className="flex-1 text-xs"
+                    />
+                    {field.secret && (
+                      <Button variant="outline" size="sm" className="h-9 px-2 text-[11px] shrink-0"
+                        onClick={() => setRevealedSecrets((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(field.key)) next.delete(field.key); else next.add(field.key);
+                          return next;
+                        })}
+                      >
+                        {revealedSecrets.has(field.key) ? t("skills.hide") : t("skills.show")}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </label>
-            ))}
+              ))}
+            </div>
 
-            {/* Telegram: require_pairing checkbox + pairing code hint */}
+            {/* Telegram extras */}
             {editingBot.type === "telegram" && (
-              <>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
                     checked={editingBot.credentials.require_pairing === "true" || editingBot.credentials.require_pairing === true || editingBot.credentials.require_pairing === undefined}
-                    onChange={(e) => updateCredential("require_pairing", e.target.checked ? "true" : "false")}
-                    style={{ width: 16, height: 16 }}
+                    onCheckedChange={(v) => updateCredential("require_pairing", v ? "true" : "false")}
                   />
-                  <span style={{ fontSize: 12 }}>{t("config.imPairing")}</span>
+                  <span className="text-xs">{t("config.imPairing")}</span>
                 </label>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 11, opacity: 0.7, marginBottom: 12, lineHeight: "24px" }}>
+                <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-muted-foreground/70 leading-6">
                   <span>🔑 {t("config.imCurrentPairingCode")}：</span>
                   {tgPairingLoading ? (
-                    <span style={{ opacity: 0.5 }}>...</span>
+                    <span className="opacity-50">...</span>
                   ) : tgPairingCode ? (
-                    <code style={{ background: "var(--muted, #f3f4f6)", padding: "1px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600, letterSpacing: "0.1em", userSelect: "all" }}>{tgPairingCode}</code>
+                    <code className="bg-muted px-2 py-0.5 rounded text-xs font-semibold tracking-widest select-all">{tgPairingCode}</code>
                   ) : (
-                    <span style={{ opacity: 0.5 }}>{t("config.imPairingCodeNotGenerated")}</span>
+                    <span className="opacity-50">{t("config.imPairingCodeNotGenerated")}</span>
                   )}
-                  <button
-                    type="button"
-                    onClick={loadTgPairingCode}
-                    disabled={tgPairingLoading}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 3,
-                      padding: "2px 8px", borderRadius: 4, fontSize: 11,
-                      border: "1px solid var(--line)", background: "transparent",
-                      cursor: tgPairingLoading ? "not-allowed" : "pointer", opacity: tgPairingLoading ? 0.5 : 1,
-                    }}
-                  >
+                  <Button variant="outline" size="sm" className="h-5 px-2 text-[11px] gap-1" onClick={loadTgPairingCode} disabled={tgPairingLoading}>
                     <IconRefresh size={11} /> {t("common.refresh")}
-                  </button>
+                  </Button>
                 </div>
-              </>
+              </div>
             )}
 
-            {/* QQ Bot: QR onboard + sandbox checkbox + mode toggle */}
+            {/* QQ Bot extras */}
             {editingBot.type === "qqbot" && (
-              <>
+              <div className="space-y-2.5">
                 {venvDir && (
-                  <button
-                    type="button"
-                    style={{
-                      width: "100%", padding: "10px 0", marginBottom: 12,
-                      borderRadius: 8, border: "1.5px dashed var(--accent, #3b82f6)",
-                      background: "var(--accent-bg, rgba(59,130,246,0.06))",
-                      color: "var(--accent, #3b82f6)", fontWeight: 600, fontSize: 13,
-                      cursor: "pointer", transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.12))"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.06))"; }}
-                    onClick={() => setShowQQBotQR(true)}
-                  >{t("qqbot.qrScanCreate")}</button>
+                  <Button variant="outline" className="w-full border-dashed border-primary text-primary" onClick={() => setShowQQBotQR(true)}>
+                    {t("qqbot.qrScanCreate")}
+                  </Button>
                 )}
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
                     checked={editingBot.credentials.sandbox === "true" || editingBot.credentials.sandbox === true}
-                    onChange={(e) => updateCredential("sandbox", e.target.checked ? "true" : "false")}
-                    style={{ width: 16, height: 16 }}
+                    onCheckedChange={(v) => updateCredential("sandbox", v ? "true" : "false")}
                   />
-                  <span style={{ fontSize: 12 }}>{t("config.imQQBotSandbox")}</span>
+                  <span className="text-xs">{t("config.imQQBotSandbox")}</span>
                 </label>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>{t("config.imQQBotMode")}</div>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-muted-foreground/60">{t("config.imQQBotMode")}</Label>
                   <ToggleGroup type="single" variant="outline" size="sm" value={String(editingBot.credentials.mode || "websocket")} onValueChange={(v) => { if (v) updateCredential("mode", v); }} className="[&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground">
                     <ToggleGroupItem value="websocket">WebSocket</ToggleGroupItem>
                     <ToggleGroupItem value="webhook">Webhook</ToggleGroupItem>
                   </ToggleGroup>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  <p className="text-[11px] text-muted-foreground">
                     {(String(editingBot.credentials.mode || "websocket")) === "websocket"
                       ? t("config.imQQBotModeWsHint")
                       : t("config.imQQBotModeWhHint")}
-                  </div>
+                  </p>
                 </div>
-              </>
+              </div>
             )}
 
-            {/* ── Feishu: QR onboard + streaming + group mode ── */}
+            {/* Feishu extras */}
             {editingBot.type === "feishu" && (
-              <>
+              <div className="space-y-3">
                 {venvDir && (
-                  <button
-                    type="button"
-                    style={{
-                      width: "100%", padding: "10px 0", marginBottom: 12,
-                      borderRadius: 8, border: "1.5px dashed var(--accent, #3b82f6)",
-                      background: "var(--accent-bg, rgba(59,130,246,0.06))",
-                      color: "var(--accent, #3b82f6)", fontWeight: 600, fontSize: 13,
-                      cursor: "pointer", transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.12))"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--accent-bg, rgba(59,130,246,0.06))"; }}
-                    onClick={() => setShowFeishuQR(true)}
-                  >{t("feishu.qrScanCreate")}</button>
+                  <Button variant="outline" className="w-full border-dashed border-primary text-primary" onClick={() => setShowFeishuQR(true)}>
+                    {t("feishu.qrScanCreate")}
+                  </Button>
                 )}
-                <div className="divider" style={{ margin: "10px 0" }} />
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{t("feishu.streaming")}</div>
-                <div
-                  onClick={() => {
-                    const next = !(editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true);
-                    updateCredential("streaming_enabled", next ? "true" : "false");
-                  }}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "8px 12px", borderRadius: 8, cursor: "pointer",
-                    background: "var(--bg2, #f8fafc)", border: "1px solid var(--line)",
-                    marginBottom: 8, transition: "background 0.15s",
-                  }}
-                >
-                  <span style={{ fontSize: 13 }}>{t("feishu.streaming")}</span>
-                  <div style={{
-                    width: 40, height: 22, borderRadius: 11, position: "relative",
-                    background: (editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true) ? "var(--ok, #10b981)" : "var(--line)",
-                    transition: "background 0.2s",
-                  }}>
-                    <div style={{
-                      width: 18, height: 18, borderRadius: 9, background: "#fff",
-                      position: "absolute", top: 2, boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                      left: (editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true) ? 20 : 2,
-                      transition: "left 0.2s",
-                    }} />
-                  </div>
-                </div>
-                {(editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true) && (
-                  <div
-                    onClick={() => {
-                      const next = !(editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true);
-                      updateCredential("group_streaming", next ? "true" : "false");
-                    }}
-                    style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "8px 12px", borderRadius: 8, cursor: "pointer",
-                      background: "var(--bg2, #f8fafc)", border: "1px solid var(--line)",
-                      marginBottom: 8, marginLeft: 12, transition: "background 0.15s",
-                    }}
+                <div className="border-t" />
+                <Label className="text-xs font-semibold">{t("feishu.streaming")}</Label>
+                <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                  <span className="text-sm">{t("feishu.streaming")}</span>
+                  <Switch checked={streamingEnabled} onCheckedChange={(v) => updateCredential("streaming_enabled", v ? "true" : "false")} />
+                </label>
+                {streamingEnabled && (
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none ml-3">
+                    <span className="text-sm">{t("feishu.groupStreaming")}</span>
+                    <Switch checked={groupStreamingEnabled} onCheckedChange={(v) => updateCredential("group_streaming", v ? "true" : "false")} />
+                  </label>
+                )}
+                <div className="space-y-1.5">
+                  <Label>{t("feishu.groupMode")}</Label>
+                  <ToggleGroup type="single" variant="outline" size="sm"
+                    value={String(editingBot.credentials.group_response_mode || "mention_only")}
+                    onValueChange={(v) => { if (v) updateCredential("group_response_mode", v); }}
+                    className="[&_[data-state=on]]:bg-primary [&_[data-state=on]]:text-primary-foreground"
                   >
-                    <span style={{ fontSize: 13 }}>{t("feishu.groupStreaming")}</span>
-                    <div style={{
-                      width: 40, height: 22, borderRadius: 11, position: "relative",
-                      background: (editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true) ? "var(--ok, #10b981)" : "var(--line)",
-                      transition: "background 0.2s",
-                    }}>
-                      <div style={{
-                        width: 18, height: 18, borderRadius: 9, background: "#fff",
-                        position: "absolute", top: 2, boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                        left: (editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true) ? 20 : 2,
-                        transition: "left 0.2s",
-                      }} />
-                    </div>
-                  </div>
-                )}
-                <div style={{ marginTop: 8, marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{t("feishu.groupMode")}</div>
-                  <div style={{ display: "flex", gap: 6 }}>
                     {(["mention_only", "smart", "always"] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        className={(editingBot.credentials.group_response_mode || "mention_only") === m ? "capChipActive" : "capChip"}
-                        onClick={() => updateCredential("group_response_mode", m)}
-                      >
-                        {t(`feishu.groupMode_${m}`)}
-                      </button>
+                      <ToggleGroupItem key={m} value={m}>{t(`feishu.groupMode_${m}`)}</ToggleGroupItem>
                     ))}
-                  </div>
+                  </ToggleGroup>
                   {(editingBot.credentials.group_response_mode === "smart" || editingBot.credentials.group_response_mode === "always") && (
-                    <div style={{ fontSize: 11, color: "#e67700", marginTop: 6, lineHeight: 1.5 }}>
-                      {t("feishu.groupModeHint")}
-                    </div>
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">{t("feishu.groupModeHint")}</p>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
 
-          {/* Editor footer */}
-          <div style={{
-            padding: "12px 20px", borderTop: "1px solid var(--line)",
-            display: "flex", gap: 8, justifyContent: "flex-end",
-          }}>
-            <button
-              onClick={closeEditor}
-              style={{
-                padding: "8px 18px", borderRadius: 8, border: "1px solid var(--line)",
-                background: "transparent", cursor: "pointer", fontSize: 13,
-              }}
-            >
-              {t("common.cancel")}
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving || !editingBot.id.trim()}
-              style={{
-                padding: "8px 18px", borderRadius: 8, border: "none",
-                background: "var(--primary, #3b82f6)", color: "#fff",
-                cursor: saving ? "wait" : "pointer", fontSize: 13,
-                fontWeight: 600, opacity: saving || !editingBot.id.trim() ? 0.5 : 1,
-              }}
-            >
+          {/* Footer */}
+          <SheetFooter className="border-t p-4">
+            <Button variant="outline" onClick={closeEditor}>{t("common.cancel")}</Button>
+            <Button onClick={handleSave} disabled={saving || !editingBot.id.trim()}>
               {saving ? "..." : t("im.botSaveOnly")}
-            </button>
-            <button
-              className="btnApplyRestart"
-              onClick={handleSaveAndRestart}
-              disabled={saving || !editingBot.id.trim()}
-              title={t("im.botApplyRestartHint")}
-              style={{
-                padding: "8px 18px", borderRadius: 8, border: "none",
-                color: "#fff", cursor: saving ? "wait" : "pointer", fontSize: 13,
-                fontWeight: 600, opacity: saving || !editingBot.id.trim() ? 0.5 : 1,
-              }}
-            >
+            </Button>
+            <Button className="btnApplyRestart" onClick={handleSaveAndRestart} disabled={saving || !editingBot.id.trim()} title={t("im.botApplyRestartHint")}>
               {saving ? "..." : t("im.botApplyRestart")}
-            </button>
-          </div>
-        </div>
-        </ModalOverlay>
-      )}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       {showFeishuQR && venvDir && (
         <FeishuQRModal

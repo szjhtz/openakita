@@ -144,14 +144,47 @@ async def list_sessions(request: Request, channel: str = Query("")):
     return JSONResponse(content={"sessions": result})
 
 
+def _get_storage():
+    try:
+        from openakita.config import settings
+        from openakita.memory.storage import get_shared_storage
+        return get_shared_storage(settings.project_root / "data" / "memory" / "openakita.db")
+    except Exception:
+        return None
+
+
 @router.get("/api/im/sessions/{session_id}/messages")
 async def get_session_messages(
     request: Request,
     session_id: str,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    source: str = Query("memory"),
 ):
-    """Return messages for a specific session."""
+    """Return messages for a specific session. source=memory (default) or sqlite."""
+
+    if source == "sqlite":
+        storage = _get_storage()
+        if storage:
+            rows, total = storage.list_turns(session_id, limit, offset)
+            messages = [
+                {
+                    "id": r.get("id"),
+                    "role": r.get("role", "user"),
+                    "content": r.get("content", ""),
+                    "timestamp": r.get("timestamp", ""),
+                    "tool_calls": r.get("tool_calls"),
+                    "tool_results": r.get("tool_results"),
+                }
+                for r in rows
+            ]
+            return JSONResponse(content={
+                "messages": messages,
+                "total": total,
+                "hasMore": offset + limit < total,
+                "source": "sqlite",
+            })
+
     session_mgr = _get_session_manager(request)
     if session_mgr is None:
         return JSONResponse(content={"messages": [], "total": 0, "hasMore": False})
@@ -161,7 +194,6 @@ async def get_session_messages(
     if sess is None:
         return JSONResponse(content={"messages": [], "total": 0, "hasMore": False})
 
-    # 消息存储在 sess.context.messages
     ctx = getattr(sess, "context", None)
     history = getattr(ctx, "messages", []) if ctx else []
     total = len(history)
@@ -190,12 +222,46 @@ async def get_session_messages(
         "messages": messages,
         "total": total,
         "hasMore": offset + limit < total,
+        "source": "memory",
     })
+
+
+class DeleteMessagesRequest(BaseModel):
+    turn_ids: list[int]
+
+
+@router.post("/api/im/sessions/{session_id}/messages/delete")
+async def delete_session_messages(request: Request, session_id: str, body: DeleteMessagesRequest):
+    """Delete specific messages (conversation_turns) by their SQLite IDs."""
+    storage = _get_storage()
+    if storage is None:
+        return JSONResponse(status_code=500, content={"error": "storage not available"})
+
+    deleted = storage.delete_turns(body.turn_ids)
+    if deleted:
+        logger.info(f"[IM] Deleted {deleted} message(s) from session {session_id}")
+
+    session_mgr = _get_session_manager(request)
+    if session_mgr and body.turn_ids:
+        sessions = getattr(session_mgr, "_sessions", {})
+        sess = sessions.get(session_id)
+        if sess:
+            ctx = getattr(sess, "context", None)
+            if ctx:
+                msgs = getattr(ctx, "messages", [])
+                if msgs:
+                    turn_id_set = set(body.turn_ids)
+                    ctx.messages = [
+                        m for i, m in enumerate(msgs)
+                        if i not in turn_id_set
+                    ]
+
+    return JSONResponse(content={"ok": True, "deleted": deleted})
 
 
 @router.delete("/api/im/sessions/{session_id}")
 async def delete_im_session(request: Request, session_id: str):
-    """Close and remove an IM session by its session_key (used as sessionId on the frontend)."""
+    """Close and remove an IM session, including its SQLite conversation_turns."""
     session_mgr = _get_session_manager(request)
     if session_mgr is None:
         return JSONResponse(content={"ok": False, "error": "session_manager not available"})
@@ -203,10 +269,20 @@ async def delete_im_session(request: Request, session_id: str):
     removed = session_mgr.close_session(session_id)
     if removed:
         logger.info(f"[IM] Deleted session via API: {session_id}")
-    else:
-        logger.debug(f"[IM] Session not found for deletion: {session_id}")
 
-    return JSONResponse(content={"ok": True, "removed": removed})
+    turns_deleted = 0
+    try:
+        from openakita.config import settings
+        from openakita.memory.storage import get_shared_storage
+        db_path = settings.project_root / "data" / "memory" / "openakita.db"
+        storage = get_shared_storage(db_path)
+        turns_deleted = storage.delete_turns_for_session(session_id)
+        if turns_deleted:
+            logger.info(f"[IM] Purged {turns_deleted} conversation_turns for session: {session_id}")
+    except Exception as e:
+        logger.warning(f"[IM] Failed to purge conversation_turns for {session_id}: {e}")
+
+    return JSONResponse(content={"ok": True, "removed": removed, "turnsDeleted": turns_deleted})
 
 
 # ─── Bot Config (per-chat enable/disable) ────────────────────────────────
@@ -257,6 +333,92 @@ async def delete_bot_config(
     if removed:
         _notify_im_event("im:bot_config_changed", {"channel": channel, "chat_id": chat_id})
     return JSONResponse(content={"ok": True, "removed": removed})
+
+
+# ─── Group Policy Management ─────────────────────────────────────────────
+
+_GROUP_POLICY_PATH = Path("data/sessions/group_policy.json")
+
+
+def _load_group_policy() -> dict:
+    if _GROUP_POLICY_PATH.exists():
+        try:
+            import json
+            return json.loads(_GROUP_POLICY_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_group_policy(data: dict) -> None:
+    from openakita.utils.atomic_io import atomic_json_write
+    _GROUP_POLICY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    atomic_json_write(_GROUP_POLICY_PATH, data)
+
+
+@router.get("/api/im/group-policy")
+async def get_group_policy(request: Request, channel: str = Query("")):
+    """Return the current group response mode + allowlist for a channel."""
+    gateway = _get_gateway(request)
+    if gateway is None:
+        return JSONResponse(content={"mode": "mention_only", "allowlist": [], "groups": []})
+
+    mode = gateway._get_group_response_mode(channel).value if channel else "mention_only"
+    allowlist = list(gateway._get_group_allowlist(channel)) if channel else []
+
+    groups: list[dict[str, Any]] = []
+    session_mgr = _get_session_manager(request)
+    if session_mgr and channel:
+        sessions = getattr(session_mgr, "_sessions", {})
+        seen: set[str] = set()
+        for sess in sessions.values():
+            if getattr(sess, "channel", None) != channel:
+                continue
+            if getattr(sess, "chat_type", "private") != "group":
+                continue
+            cid = getattr(sess, "chat_id", None)
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            groups.append({
+                "chatId": cid,
+                "chatName": getattr(sess, "chat_name", "") or "",
+                "allowed": cid in allowlist,
+            })
+
+    return JSONResponse(content={"mode": mode, "allowlist": allowlist, "groups": groups})
+
+
+class GroupPolicyRequest(BaseModel):
+    channel: str
+    mode: str
+    allowlist: list[str] = []
+
+
+@router.post("/api/im/group-policy")
+async def set_group_policy(request: Request, body: GroupPolicyRequest):
+    """Update group response mode + allowlist for a channel (runtime + persisted)."""
+    gateway = _get_gateway(request)
+    if gateway is None:
+        return JSONResponse(status_code=500, content={"error": "gateway not available"})
+
+    from openakita.channels.group_response import GroupResponseMode
+    try:
+        GroupResponseMode(body.mode)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": f"Invalid mode: {body.mode}"})
+
+    adapter = gateway._adapters.get(body.channel)
+    if adapter is not None:
+        adapter._group_response_mode = body.mode
+        adapter._group_allowlist = set(body.allowlist)
+
+    policy_data = _load_group_policy()
+    policy_data[body.channel] = {"mode": body.mode, "allowlist": body.allowlist}
+    _save_group_policy(policy_data)
+
+    _notify_im_event("im:group_policy_changed", {"channel": body.channel, "mode": body.mode})
+    return JSONResponse(content={"ok": True})
 
 
 @router.get("/api/im/telegram/pairing-code")

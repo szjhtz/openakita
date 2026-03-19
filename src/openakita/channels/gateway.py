@@ -1302,6 +1302,29 @@ class MessageGateway:
             return set(raw) if not isinstance(raw, set) else raw
         return set()
 
+    def _apply_persisted_group_policy(self) -> None:
+        """Load persisted group policy from JSON and apply to adapters."""
+        from pathlib import Path
+        import json
+        policy_path = Path("data/sessions/group_policy.json")
+        if not policy_path.exists():
+            return
+        try:
+            data = json.loads(policy_path.read_text(encoding="utf-8"))
+            for channel, cfg in data.items():
+                adapter = self._adapters.get(channel)
+                if adapter is None:
+                    continue
+                mode = cfg.get("mode")
+                allowlist = cfg.get("allowlist", [])
+                if mode:
+                    adapter._group_response_mode = mode
+                if allowlist:
+                    adapter._group_allowlist = set(allowlist)
+            logger.info(f"[Gateway] Applied persisted group policy for {len(data)} channel(s)")
+        except Exception as e:
+            logger.warning(f"[Gateway] Failed to load group policy: {e}")
+
     async def start(self) -> None:
         """启动网关"""
         self._running = True
@@ -1325,6 +1348,8 @@ class MessageGateway:
 
         self._started_adapters = started
         self._failed_adapters = failed
+
+        self._apply_persisted_group_policy()
 
         _notify_im_event("im:channel_status", {"started": started, "failed": failed})
 

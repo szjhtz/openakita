@@ -582,10 +582,10 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
   // ── Not running ──
   if (!serviceRunning) {
     return (
-      <div className="imViewEmpty">
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
         <IconClock size={48} />
-        <div style={{ marginTop: 12, fontWeight: 600 }}>计划任务</div>
-        <div style={{ marginTop: 4, opacity: 0.5, fontSize: 13 }}>后端服务未启动，请启动后再进行使用</div>
+        <div className="mt-3 font-semibold">计划任务</div>
+        <div className="mt-1 text-xs opacity-50">后端服务未启动，请启动后再进行使用</div>
       </div>
     );
   }
@@ -1022,27 +1022,25 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                   >
                     <Zap size={13} />
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => openEdit(task)}
+                    title={t("scheduler.editTask")}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <Pencil size={13} />
+                  </Button>
                   {task.deletable && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => openEdit(task)}
-                        title={t("scheduler.editTask")}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <Pencil size={13} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => deleteTask(task)}
-                        title={t("scheduler.delete")}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 size={13} />
-                      </Button>
-                    </>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => deleteTask(task)}
+                      title={t("scheduler.delete")}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 size={13} />
+                    </Button>
                   )}
                 </div>
               </div>
